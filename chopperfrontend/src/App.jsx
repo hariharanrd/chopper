@@ -20,6 +20,16 @@ const parseTimeStr = (dtStr) => {
   return parts[1] ? parts[1].slice(0, 5) : '';
 };
 
+// Generates YYYY-MM-DDTHH:mm for targetDateStr (or current time if today)
+const getInitialFormDateTime = (targetDateStr) => {
+  const now = new Date();
+  const currentHHmm = now.toTimeString().slice(0, 5);
+  if (targetDateStr) {
+    return `${targetDateStr}T${currentHHmm}`;
+  }
+  return now.toISOString().slice(0, 16);
+};
+
 export default function App() {
   const [data, setData] = useState({ entries: [], reactions: [], confirmedTriggers: [] });
   const [loading, setLoading] = useState(true);
@@ -30,20 +40,22 @@ export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
 
-  // Modals
+  // Modals & Edit Tracking
   const [showLogModal, setShowLogModal] = useState(false);
   const [showReactionModal, setShowReactionModal] = useState(false);
+  const [editingEntryId, setEditingEntryId] = useState(null);
+  const [editingReactionId, setEditingReactionId] = useState(null);
 
   // Form states
   const [entryForm, setEntryForm] = useState({
     entryType: 'food',
     itemName: '',
-    loggedAt: new Date().toISOString().slice(0, 16),
+    loggedAt: getInitialFormDateTime(selectedDate),
     notes: ''
   });
 
   const [reactionForm, setReactionForm] = useState({
-    symptomStartTime: new Date().toISOString().slice(0, 16),
+    symptomStartTime: getInitialFormDateTime(selectedDate),
     severityLevel: 3,
     symptoms: ['Skin rash', 'Itching'],
     resolution: 'auto',
@@ -61,7 +73,6 @@ export default function App() {
         checked = true;
         window.catalyst.auth.isUserAuthenticated()
           .then(res => {
-            console.log('catalyst.auth.isUserAuthenticated resolved:', res);
             const userObj = (res && typeof res === 'object')
               ? (res.content || res.data || res.user_details || res)
               : null;
@@ -70,9 +81,7 @@ export default function App() {
             loadData();
             setAuthChecked(true);
           })
-          .catch(err => {
-            console.log('catalyst.auth.isUserAuthenticated rejected:', err);
-            // Fallback check against backend session endpoint
+          .catch(() => {
             fetchDashboardData().then(dashRes => {
               if (dashRes && !dashRes.unauthenticated && !dashRes.error) {
                 setAuthUser({ email_id: 'hariharan.dr@zoho.in', first_name: 'Hariharan' });
@@ -87,10 +96,8 @@ export default function App() {
       }
     };
 
-    // Check periodically until SDK is loaded
     const interval = setInterval(performAuthCheck, 100);
 
-    // Timeout fallback if SDK fails to load
     const timeout = setTimeout(() => {
       clearInterval(interval);
       if (!checked) {
@@ -135,7 +142,6 @@ export default function App() {
         console.warn('catalyst.auth.login fallback:', e);
       }
     }
-    // Slate hosted login endpoint
     window.location.href = '/__catalyst/auth/login';
   };
 
@@ -145,6 +151,60 @@ export default function App() {
     } else {
       window.location.reload();
     }
+  };
+
+  // Open Log Entry Modal (Create or Pre-fill)
+  const openNewLogModal = (overrideDate) => {
+    const targetDate = overrideDate || selectedDate;
+    setEditingEntryId(null);
+    setEntryForm({
+      entryType: 'food',
+      itemName: '',
+      loggedAt: getInitialFormDateTime(targetDate),
+      notes: ''
+    });
+    setShowLogModal(true);
+  };
+
+  const openEditLogModal = (entry) => {
+    setEditingEntryId(entry.id);
+    setEntryForm({
+      id: entry.id,
+      entryType: entry.entryType || 'food',
+      itemName: entry.itemName || '',
+      loggedAt: entry.loggedAt ? String(entry.loggedAt).replace(' ', 'T').slice(0, 16) : getInitialFormDateTime(selectedDate),
+      notes: entry.notes || ''
+    });
+    setShowLogModal(true);
+  };
+
+  // Open Reaction Modal (Create or Pre-fill)
+  const openNewReactionModal = (overrideDate) => {
+    const targetDate = overrideDate || selectedDate;
+    setEditingReactionId(null);
+    setReactionForm({
+      symptomStartTime: getInitialFormDateTime(targetDate),
+      severityLevel: 3,
+      symptoms: ['Skin rash', 'Itching'],
+      resolution: 'auto',
+      resolvedInMinutes: 120,
+      notes: ''
+    });
+    setShowReactionModal(true);
+  };
+
+  const openEditReactionModal = (reaction) => {
+    setEditingReactionId(reaction.id);
+    setReactionForm({
+      id: reaction.id,
+      symptomStartTime: reaction.symptomStartTime ? String(reaction.symptomStartTime).replace(' ', 'T').slice(0, 16) : getInitialFormDateTime(selectedDate),
+      severityLevel: reaction.severityLevel || 3,
+      symptoms: Array.isArray(reaction.symptoms) ? reaction.symptoms : [],
+      resolution: reaction.resolution || 'auto',
+      resolvedInMinutes: reaction.resolvedInMinutes || 120,
+      notes: reaction.notes || ''
+    });
+    setShowReactionModal(true);
   };
 
   // Helper map: date -> day summary
@@ -212,36 +272,31 @@ export default function App() {
       .sort((a, b) => b.reactionDaysCount - a.reactionDaysCount || b.ratio - a.ratio);
   }, [data, daySummaryMap]);
 
-  // Handlers
+  // Save Handlers (Create or Update)
   const handleSaveEntry = async (e) => {
     e.preventDefault();
     if (!entryForm.itemName.trim()) return;
-    const res = await addLogEntry(entryForm);
+    const payload = editingEntryId ? { ...entryForm, id: editingEntryId } : entryForm;
+    const res = await addLogEntry(payload);
     if (res && res.error === 'unauthenticated') {
       handleLogin();
       return;
     }
     setShowLogModal(false);
-    setEntryForm({ entryType: 'food', itemName: '', loggedAt: new Date().toISOString().slice(0, 16), notes: '' });
+    setEditingEntryId(null);
     loadData();
   };
 
   const handleSaveReaction = async (e) => {
     e.preventDefault();
-    const res = await addReaction(reactionForm);
+    const payload = editingReactionId ? { ...reactionForm, id: editingReactionId } : reactionForm;
+    const res = await addReaction(payload);
     if (res && res.error === 'unauthenticated') {
       handleLogin();
       return;
     }
     setShowReactionModal(false);
-    setReactionForm({
-      symptomStartTime: new Date().toISOString().slice(0, 16),
-      severityLevel: 3,
-      symptoms: ['Skin rash', 'Itching'],
-      resolution: 'auto',
-      resolvedInMinutes: 120,
-      notes: ''
-    });
+    setEditingReactionId(null);
     loadData();
   };
 
@@ -295,10 +350,10 @@ export default function App() {
         <div className="nav-actions">
           {authUser && (
             <>
-              <button className="btn btn-primary" onClick={() => setShowLogModal(true)}>
+              <button className="btn btn-primary" onClick={() => openNewLogModal()}>
                 <span>+ Log Item</span>
               </button>
-              <button className="btn btn-danger" onClick={() => setShowReactionModal(true)}>
+              <button className="btn btn-danger" onClick={() => openNewReactionModal()}>
                 <span>🚨 Log Reaction</span>
               </button>
             </>
@@ -393,6 +448,14 @@ export default function App() {
                         </div>
                         <div className="timeline-body">{entry.itemName}</div>
                         {entry.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{entry.notes}</div>}
+                        <div className="action-links">
+                          <button className="action-link-btn edit" onClick={() => openEditLogModal(entry)}>
+                            ✏️ Edit
+                          </button>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(entry.id, 'entry')}>
+                            🗑️ Delete
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -410,6 +473,14 @@ export default function App() {
                         </div>
                         <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '4px' }}>
                           Resolution: {r.resolution === 'antihistamine' ? '💊 Took Antihistamine' : `⏱️ Auto-resolved (${r.resolvedInMinutes || 'some'} mins)`}
+                        </div>
+                        <div className="action-links">
+                          <button className="action-link-btn edit" style={{ color: '#93c5fd' }} onClick={() => openEditReactionModal(r)}>
+                            ✏️ Edit
+                          </button>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(r.id, 'reaction')}>
+                            🗑️ Delete
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -453,13 +524,13 @@ export default function App() {
         </main>
       ) : (
         /* Day Drill-Down View */
-        <main className="dashboard-grid" style={{ gridTemplateColumns: '1fr 380px' }}>
+        <main className="dashboard-grid">
           <div className="card">
             <div className="day-detail-header">
               <button className="back-btn" onClick={() => setViewMode('dashboard')}>
                 ← Back to Dashboard
               </button>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '1.2rem', fontWeight: 700 }}>{selectedDate}</span>
                 {selectedDayInfo.reactions.length > 0 ? (
                   <span className={`tag-pill ${selectedDayInfo.maxSeverity >= 3 ? 'high-risk' : 'med-risk'}`}>
@@ -473,8 +544,16 @@ export default function App() {
               </div>
             </div>
 
-            <div className="card-title">
-              <span>Full Timeline for {selectedDate}</span>
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Timeline for {selectedDate}</span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => openNewLogModal(selectedDate)}>
+                  + Log for {selectedDate}
+                </button>
+                <button className="btn btn-danger" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => openNewReactionModal(selectedDate)}>
+                  🚨 Log Reaction
+                </button>
+              </div>
             </div>
 
             <div className="timeline-list">
@@ -493,13 +572,15 @@ export default function App() {
                           <span>{parseTimeStr(e.loggedAt)}</span>
                         </div>
                         <div className="timeline-body">{e.itemName}</div>
-                        {e.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{e.notes}</div>}
-                        <button
-                          onClick={() => handleDeleteItem(e.id, 'entry')}
-                          style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: '0.75rem', cursor: 'pointer', marginTop: '6px' }}
-                        >
-                          Delete
-                        </button>
+                        {e.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{e.notes}</div>}
+                        <div className="action-links">
+                          <button className="action-link-btn edit" onClick={() => openEditLogModal(e)}>
+                            ✏️ Edit
+                          </button>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(e.id, 'entry')}>
+                            🗑️ Delete
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -519,12 +600,14 @@ export default function App() {
                           {r.resolution === 'antihistamine' ? '💊 Took Antihistamine' : `⏱️ Auto-resolved (${r.resolvedInMinutes || 'some'} min)`}
                         </div>
                         {r.notes && <div style={{ fontSize: '0.8rem', color: '#f8fafc', marginTop: '4px' }}>Note: {r.notes}</div>}
-                        <button
-                          onClick={() => handleDeleteItem(r.id, 'reaction')}
-                          style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: '0.75rem', cursor: 'pointer', marginTop: '6px' }}
-                        >
-                          Delete
-                        </button>
+                        <div className="action-links">
+                          <button className="action-link-btn edit" style={{ color: '#93c5fd' }} onClick={() => openEditReactionModal(r)}>
+                            ✏️ Edit
+                          </button>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(r.id, 'reaction')}>
+                            🗑️ Delete
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -570,12 +653,12 @@ export default function App() {
         </main>
       )}
 
-      {/* Log Item Modal */}
+      {/* Log Item Modal (Create or Edit) */}
       {showLogModal && (
         <div className="modal-overlay" onClick={() => setShowLogModal(false)}>
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span>Log Entry</span>
+              <span>{editingEntryId ? '✏️ Edit Log Entry' : 'Log Entry'}</span>
               <button className="modal-close" onClick={() => setShowLogModal(false)}>×</button>
             </div>
 
@@ -629,19 +712,19 @@ export default function App() {
               </div>
 
               <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem', justifyContent: 'center' }}>
-                Log Item
+                {editingEntryId ? 'Update Entry' : 'Log Item'}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Log Reaction Modal */}
+      {/* Log Reaction Modal (Create or Edit) */}
       {showReactionModal && (
         <div className="modal-overlay" onClick={() => setShowReactionModal(false)}>
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span>Log Allergy Reaction 🚨</span>
+              <span>{editingReactionId ? '✏️ Edit Allergy Reaction' : 'Log Allergy Reaction 🚨'}</span>
               <button className="modal-close" onClick={() => setShowReactionModal(false)}>×</button>
             </div>
 
@@ -730,7 +813,7 @@ export default function App() {
               </div>
 
               <button type="submit" className="btn btn-danger" style={{ width: '100%', justifyContent: 'center' }}>
-                Log Allergy Reaction
+                {editingReactionId ? 'Update Reaction' : 'Log Allergy Reaction'}
               </button>
             </form>
           </div>

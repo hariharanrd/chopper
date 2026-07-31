@@ -85,6 +85,7 @@ body {
 
 .nav-actions {
   display: flex;
+  align-items: center;
   gap: 0.75rem;
 }
 
@@ -152,6 +153,7 @@ body {
   border-radius: var(--radius-lg);
   padding: 1.5rem;
   box-shadow: var(--shadow-main);
+  overflow: hidden;
 }
 
 .card-title {
@@ -161,6 +163,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 /* Heatmap Calendar View */
@@ -168,6 +172,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  overflow: hidden;
 }
 
 .heatmap-legend {
@@ -199,8 +204,15 @@ body {
   display: grid;
   grid-template-columns: repeat(26, 1fr);
   gap: 6px;
-  padding: 1rem 0;
+  padding: 8px 6px;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Hide standard scrollbar to prevent hover artifacts */
+  -ms-overflow-style: none;
+}
+
+.heatmap-grid::-webkit-scrollbar {
+  display: none;
 }
 
 .heatmap-cell {
@@ -208,14 +220,15 @@ body {
   border-radius: 4px;
   background-color: #1e2738;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
   position: relative;
+  transform-origin: center center;
 }
 
 .heatmap-cell:hover {
-  transform: scale(1.2);
+  transform: scale(1.18);
   z-index: 10;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.6);
 }
 
 .heatmap-cell.status-safe { background-color: var(--accent-green); }
@@ -291,6 +304,34 @@ body {
 .timeline-body {
   font-size: 0.95rem;
   font-weight: 500;
+}
+
+.action-links {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 8px;
+}
+
+.action-link-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.action-link-btn.edit {
+  color: #60a5fa;
+}
+
+.action-link-btn.delete {
+  color: #ef4444;
+}
+
+.action-link-btn:hover {
+  text-decoration: underline;
+  opacity: 0.9;
 }
 
 /* Flagged Foods Strip */
@@ -510,12 +551,6 @@ body {
   color: #fff;
 }
 
-.day-grid {
-  display: grid;
-  grid-template-columns: 1fr 380px;
-  gap: 1.5rem;
-}
-
 .insight-card {
   background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
   border: 1px solid rgba(245, 158, 11, 0.3);
@@ -523,9 +558,70 @@ body {
   padding: 1.5rem;
 }
 
-/* Responsive */
+/* Comprehensive Mobile & Small Screen Responsiveness */
 @media (max-width: 900px) {
-  .dashboard-grid, .day-grid {
-    grid-template-columns: 1fr;
+  .navbar {
+    padding: 0.75rem 1rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .nav-actions {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .nav-actions .btn {
+    flex: 1;
+    justify-content: center;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.82rem;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr !important;
+    padding: 1rem;
+    gap: 1rem;
+  }
+
+  .card {
+    padding: 1rem;
+  }
+
+  .heatmap-legend {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  .heatmap-grid {
+    grid-template-columns: repeat(26, minmax(14px, 1fr));
+    gap: 4px;
+    padding: 6px 2px;
+  }
+
+  .day-detail-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .modal-card {
+    width: 95vw;
+    max-width: 100%;
+    padding: 1.25rem;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  .symptoms-grid {
+    gap: 0.4rem;
+  }
+
+  .symptom-chip {
+    font-size: 0.78rem;
+    padding: 0.35rem 0.65rem;
   }
 }

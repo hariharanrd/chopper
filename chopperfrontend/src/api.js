@@ -20,21 +20,25 @@ export async function fetchDashboardData() {
 export async function addLogEntry(entry) {
   try {
     const res = await fetch(`${BASE_URL}/entries`, {
-      method: 'POST',
+      method: entry.id ? 'PUT' : 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(entry)
     });
     if (res.status === 401) {
-      alert('Session expired. Please sign in to log items.');
+      alert('Session expired. Please sign in.');
       return { error: 'unauthenticated' };
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
-    console.warn('API error on add entry:', err.message);
+    console.warn('API error on save entry:', err.message);
     return { error: err.message };
   }
+}
+
+export async function updateLogEntry(entry) {
+  return addLogEntry(entry);
 }
 
 export async function deleteLogEntry(id) {
@@ -53,21 +57,25 @@ export async function deleteLogEntry(id) {
 export async function addReaction(reaction) {
   try {
     const res = await fetch(`${BASE_URL}/reactions`, {
-      method: 'POST',
+      method: reaction.id ? 'PUT' : 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(reaction)
     });
     if (res.status === 401) {
-      alert('Session expired. Please sign in to log reactions.');
+      alert('Session expired. Please sign in.');
       return { error: 'unauthenticated' };
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
-    console.warn('API error on add reaction:', err.message);
+    console.warn('API error on save reaction:', err.message);
     return { error: err.message };
   }
+}
+
+export async function updateReaction(reaction) {
+  return addReaction(reaction);
 }
 
 export async function deleteReaction(id) {
