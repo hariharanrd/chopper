@@ -1,0 +1,27 @@
+# Node dependencies & builds
+node_modules/
+dist/
+build/
+.npm/
+
+# Java & Catalyst build outputs
+.output/
+*.class
+functions/chopper_api/lib/
+lib/
+
+# Eclipse / IDE metadata
+.classpath
+.project
+.settings/
+.vscode/
+.idea/
+
+# Catalyst CLI & temporary files
+.catalyst/
+.catalystrc
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db

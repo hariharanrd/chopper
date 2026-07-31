@@ -1,0 +1,14 @@
+{
+	"deployment": {
+		"name": "chopper_api",
+		"stack": "java21",
+		"type": "advancedio",
+		"env_variables": {},
+		"security_rules": {
+			"authentication": "required"
+		}
+	},
+	"execution": {
+		"main": "Sample"
+	}
+}

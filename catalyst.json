@@ -1,0 +1,17 @@
+{
+  "functions": {
+    "targets": [
+      "chopper_api"
+    ],
+    "ignore": [
+      ".output"
+    ],
+    "source": "functions"
+  },
+  "slate": [
+    {
+      "name": "chopperfrontend",
+      "source": "/Users/hariharand/Projects/chopper/chopperfrontend"
+    }
+  ]
+}
