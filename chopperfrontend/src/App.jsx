@@ -430,7 +430,7 @@ export default function App() {
       {/* Navbar */}
       <nav className="navbar">
         <div className="brand">
-          <div className="brand-icon">🌿</div>
+          <img src="/logo-icon.png" alt="Chopper Logo" style={{ width: '36px', height: '36px', objectFit: 'contain' }} />
           <span>Chopper</span>
         </div>
         <div className="nav-actions">
@@ -469,10 +469,12 @@ export default function App() {
         /* Passphrase Login Screen */
         <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
           <div className="card" style={{ maxWidth: '420px', width: '100%', textAlign: 'center', padding: '2.5rem' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🌿</div>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem' }}>Welcome to Chopper</h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: '1.6', marginBottom: '1.75rem' }}>
-              Enter your passphrase to access your allergy & food logs.
+            <div style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'center' }}>
+              <img src="/logo-icon.png" alt="Chopper Logo" style={{ width: '84px', height: '84px', objectFit: 'contain' }} />
+            </div>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.35rem' }}>Welcome to Chopper</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', lineHeight: '1.6', marginBottom: '1.75rem' }}>
+              Track Your Food, Debug Your Allergies
             </p>
             <form onSubmit={handlePassphraseLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div style={{ position: 'relative', width: '100%' }}>
