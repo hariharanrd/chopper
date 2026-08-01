@@ -5,7 +5,12 @@ import {
   deleteLogEntry,
   addReaction,
   deleteReaction,
-  addConfirmedTrigger
+  addConfirmedTrigger,
+  login,
+  logout,
+  getToken,
+  clearToken,
+  isTokenValid
 } from './api';
 
 // Date/Time Parsing Helpers supporting both ISO ("YYYY-MM-DDTHH:mm:ss") and Space ("YYYY-MM-DD HH:mm:ss")
@@ -36,9 +41,12 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [viewMode, setViewMode] = useState('dashboard'); // 'dashboard' | 'day_detail'
 
-  // Catalyst Auth User
+  // Passphrase Auth
   const [authUser, setAuthUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [passphraseInput, setPassphraseInput] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
 
   // Modals & Edit Tracking
   const [showLogModal, setShowLogModal] = useState(false);
@@ -64,93 +72,87 @@ export default function App() {
   });
 
   useEffect(() => {
-    let checked = false;
+    let active = true;
 
-    const performAuthCheck = () => {
-      if (checked) return;
-
-      if (window.catalyst && window.catalyst.auth) {
-        checked = true;
-        window.catalyst.auth.isUserAuthenticated()
-          .then(res => {
-            const userObj = (res && typeof res === 'object')
-              ? (res.content || res.data || res.user_details || res)
-              : null;
-
-            setAuthUser(userObj || { email_id: 'hariharan.dr@zoho.in', first_name: 'Hariharan' });
-            loadData();
-            setAuthChecked(true);
-          })
-          .catch(() => {
-            fetchDashboardData().then(dashRes => {
-              if (dashRes && !dashRes.unauthenticated && !dashRes.error) {
-                setAuthUser({ email_id: 'hariharan.dr@zoho.in', first_name: 'Hariharan' });
-                setData(dashRes);
-              } else {
-                setAuthUser(null);
-              }
-              setLoading(false);
-              setAuthChecked(true);
-            });
-          });
+    async function checkAuth() {
+      // ── Step 1: client-side token check (no network) ─────────────────────
+      if (!isTokenValid()) {
+        // Token is missing or expired locally — clear stale data & show login
+        clearToken();
+        if (active) { setAuthChecked(true); setLoading(false); }
+        return;
       }
-    };
 
-    const interval = setInterval(performAuthCheck, 100);
-
-    const timeout = setTimeout(() => {
-      clearInterval(interval);
-      if (!checked) {
-        checked = true;
-        fetchDashboardData().then(dashRes => {
-          if (dashRes && !dashRes.unauthenticated && !dashRes.error) {
-            setAuthUser({ email_id: 'hariharan.dr@zoho.in', first_name: 'Hariharan' });
-            setData(dashRes);
-          } else {
-            setAuthUser(null);
-          }
-          setLoading(false);
-          setAuthChecked(true);
-        });
+      // ── Step 2: token is locally valid — unlock the UI immediately ────────
+      if (active) {
+        setAuthUser({ first_name: 'Admin', email_id: '' });
+        setAuthChecked(true);
       }
-    }, 2000);
 
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
-    };
+      // ── Step 3: fetch dashboard data in the background ────────────────
+      try {
+        const dashRes = await fetchDashboardData();
+        if (!active) return;
+
+        if (dashRes && dashRes.unauthenticated) {
+          // Server rejected the token (e.g. secret was rotated) — force re-login
+          clearToken();
+          setAuthUser(null);
+        } else if (dashRes && !dashRes.error) {
+          setData(dashRes);
+        }
+        // On network error we stay authenticated with whatever data we have
+      } catch (e) {
+        console.warn('Failed to load dashboard data:', e);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    checkAuth();
+
+    return () => { active = false; };
   }, []);
+
+
+
 
   const loadData = async () => {
     setLoading(true);
     const res = await fetchDashboardData();
     if (res && !res.unauthenticated && !res.error) {
       setData(res);
-    } else if (res && res.unauthenticated) {
-      setAuthUser(null);
-      setData({ entries: [], reactions: [], confirmedTriggers: [] });
     }
+    // Note: never override authUser here — auth state is managed solely by checkAuth()
     setLoading(false);
   };
 
-  const handleLogin = () => {
-    if (window.catalyst && window.catalyst.auth && typeof window.catalyst.auth.login === 'function') {
-      try {
-        window.catalyst.auth.login();
-        return;
-      } catch (e) {
-        console.warn('catalyst.auth.login fallback:', e);
-      }
+  const handlePassphraseLogin = async (e) => {
+    e.preventDefault();
+    if (!passphraseInput.trim()) return;
+    setLoginLoading(true);
+    setLoginError('');
+    const result = await login(passphraseInput.trim());
+    setLoginLoading(false);
+    if (result.error) {
+      setLoginError(result.error === 'Invalid passphrase' ? 'Incorrect passphrase. Please try again.' : `Error: ${result.error}`);
+      return;
     }
-    window.location.href = '/__catalyst/auth/login';
+    // Login succeeded — fetch data and mark authenticated
+    const dashRes = await fetchDashboardData();
+    if (dashRes && !dashRes.unauthenticated && !dashRes.error) {
+      setData(dashRes);
+      setAuthUser(dashRes.user || { first_name: 'Admin', email_id: '' });
+    } else {
+      setAuthUser({ first_name: 'Admin', email_id: '' });
+    }
+    setPassphraseInput('');
   };
 
   const handleLogout = () => {
-    if (window.catalyst && window.catalyst.auth) {
-      window.catalyst.auth.signOut(window.location.origin);
-    } else {
-      window.location.reload();
-    }
+    logout();
+    setAuthUser(null);
+    setData({ entries: [], reactions: [], confirmedTriggers: [] });
   };
 
   // Open Log Entry Modal (Create or Pre-fill)
@@ -279,7 +281,7 @@ export default function App() {
     const payload = editingEntryId ? { ...entryForm, id: editingEntryId } : entryForm;
     const res = await addLogEntry(payload);
     if (res && res.error === 'unauthenticated') {
-      handleLogin();
+      handleLogout();
       return;
     }
     setShowLogModal(false);
@@ -292,7 +294,7 @@ export default function App() {
     const payload = editingReactionId ? { ...reactionForm, id: editingReactionId } : reactionForm;
     const res = await addReaction(payload);
     if (res && res.error === 'unauthenticated') {
-      handleLogin();
+      handleLogout();
       return;
     }
     setShowReactionModal(false);
@@ -359,34 +361,60 @@ export default function App() {
             </>
           )}
 
-          {authUser ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.4rem 0.8rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-              <span style={{ fontSize: '0.85rem', color: '#86efac' }}>👤 {authUser.first_name || authUser.email_id || 'Zoho User'}</span>
-              <button className="btn btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }} onClick={handleLogout}>
-                Sign Out
-              </button>
-            </div>
-          ) : (
-            <button className="btn btn-primary" onClick={handleLogin}>
-              🔑 Sign In with Zoho
-            </button>
+          {authChecked && (
+            authUser ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.4rem 0.8rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.85rem', color: '#86efac' }}>🔐 {authUser.first_name || 'Admin'}</span>
+                <button className="btn btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }} onClick={handleLogout}>
+                  Sign Out
+                </button>
+              </div>
+            ) : null
           )}
         </div>
       </nav>
 
       {/* Main Body */}
-      {!authUser ? (
-        /* Unauthenticated Auth Guard Landing Screen */
+      {!authChecked ? (
+        /* Loading Spinner Screen while verifying authentication */
+        <div style={{ display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: '1rem' }}>
+          <div className="spinner"></div>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', fontWeight: 500 }}>Loading Chopper...</p>
+        </div>
+      ) : !authUser ? (
+        /* Passphrase Login Screen */
         <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
-          <div className="card" style={{ maxWidth: '460px', width: '100%', textAlign: 'center', padding: '2.5rem' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔒</div>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.75rem' }}>Authentication Required</h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', lineHeight: '1.6', marginBottom: '1.5rem' }}>
-              Chopper is protected by Catalyst Native Authentication. Please sign in with your Zoho account to view and manage your personal food & skin allergy logs.
+          <div className="card" style={{ maxWidth: '420px', width: '100%', textAlign: 'center', padding: '2.5rem' }}>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🌿</div>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem' }}>Welcome to Chopper</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: '1.6', marginBottom: '1.75rem' }}>
+              Enter your passphrase to access your allergy & food logs.
             </p>
-            <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '0.85rem' }} onClick={handleLogin}>
-              🔑 Sign In with Zoho Account
-            </button>
+            <form onSubmit={handlePassphraseLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <input
+                type="password"
+                className="form-control"
+                placeholder="Enter passphrase…"
+                value={passphraseInput}
+                onChange={e => setPassphraseInput(e.target.value)}
+                autoFocus
+                required
+                style={{ textAlign: 'center', letterSpacing: '0.15em', fontSize: '1rem' }}
+              />
+              {loginError && (
+                <div style={{ color: '#fca5a5', fontSize: '0.875rem', background: 'rgba(239,68,68,0.1)', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
+                  {loginError}
+                </div>
+              )}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ width: '100%', justifyContent: 'center', padding: '0.85rem' }}
+                disabled={loginLoading}
+              >
+                {loginLoading ? 'Verifying…' : '🔑 Unlock'}
+              </button>
+            </form>
           </div>
         </div>
       ) : viewMode === 'dashboard' ? (

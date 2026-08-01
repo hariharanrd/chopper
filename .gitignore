@@ -25,3 +25,4 @@ lib/
 # OS metadata
 .DS_Store
 Thumbs.db
+chopperfrontend/.env.*

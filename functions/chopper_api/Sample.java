@@ -1,10 +1,14 @@
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
@@ -20,21 +24,47 @@ import com.zc.component.zcql.ZCQL;
 public class Sample implements CatalystAdvancedIOHandler {
 	private static final Logger LOGGER = Logger.getLogger(Sample.class.getName());
 
+	// JWT expiry: 24 hours in seconds
+	private static final long JWT_EXPIRY_SECONDS = 24 * 60 * 60;
+
 	@Override
 	public void runner(HttpServletRequest request, HttpServletResponse response) throws Exception {
-		String uri = request.getRequestURI();
-		if (uri == null) uri = "";
 		String method = request.getMethod().toUpperCase();
 
+		// Always handle CORS preflight
 		if ("OPTIONS".equalsIgnoreCase(method)) {
 			response.setStatus(204);
 			return;
 		}
 
-		LOGGER.log(Level.INFO, "Request Received: Method=" + method + ", URI=" + uri);
+		String uri = request.getRequestURI();
+		if (uri == null) uri = "";
+
+		// Extract the last path segment for strict route matching.
+		// e.g. "/server/chopper_api/execute/auth?foo=bar" -> "auth"
+		String path = extractPath(uri);
+
+		LOGGER.log(Level.INFO, "Request Received: Method=" + method + ", URI=" + uri + ", path=" + path);
 
 		try {
-			if (uri.contains("/entries")) {
+			// ── /auth is the only public endpoint ──────────────────────────────────
+			if ("auth".equals(path)) {
+				if ("POST".equals(method)) {
+					handleAuth(request, response);
+				} else {
+					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
+				}
+				return;
+			}
+
+			// ── All other endpoints require a valid JWT ─────────────────────────────
+			if (!isValidJwt(request)) {
+				sendJson(response, 401, new JSONObject().put("error", "Unauthorized: missing or invalid token"));
+				return;
+			}
+
+			// ── Route dispatch ──────────────────────────────────────────────────────
+			if ("entries".equals(path)) {
 				if ("GET".equals(method)) {
 					handleGetEntries(request, response);
 				} else if ("POST".equals(method) || "PUT".equals(method)) {
@@ -44,7 +74,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 				} else {
 					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
 				}
-			} else if (uri.contains("/reactions")) {
+			} else if ("reactions".equals(path)) {
 				if ("GET".equals(method)) {
 					handleGetReactions(request, response);
 				} else if ("POST".equals(method) || "PUT".equals(method)) {
@@ -54,7 +84,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 				} else {
 					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
 				}
-			} else if (uri.contains("/triggers")) {
+			} else if ("triggers".equals(path)) {
 				if ("GET".equals(method)) {
 					handleGetTriggers(request, response);
 				} else if ("POST".equals(method)) {
@@ -64,24 +94,145 @@ public class Sample implements CatalystAdvancedIOHandler {
 				} else {
 					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
 				}
-			} else if (uri.contains("/dashboard")) {
+			} else if ("dashboard".equals(path) || path.isEmpty()) {
 				if ("GET".equals(method)) {
 					handleGetDashboard(request, response);
 				} else {
 					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
 				}
 			} else {
-				if ("GET".equals(method)) {
-					handleGetDashboard(request, response);
-				} else {
-					sendJson(response, 404, new JSONObject().put("error", "Endpoint not found: " + uri));
-				}
+				sendJson(response, 404, new JSONObject().put("error", "Endpoint not found: " + uri));
 			}
 		} catch (Exception e) {
 			LOGGER.log(Level.SEVERE, "Error handling request", e);
 			sendJson(response, 500, new JSONObject().put("error", e.getMessage() != null ? e.getMessage() : "Internal server error"));
 		}
 	}
+
+	// ── Auth Endpoint ─────────────────────────────────────────────────────────────
+
+	private void handleAuth(HttpServletRequest request, HttpServletResponse response) throws Exception {
+		JSONObject body = parseBody(request);
+		String passphrase = body.optString("passphrase", "").trim();
+
+		if (passphrase.isEmpty()) {
+			sendJson(response, 400, new JSONObject().put("error", "passphrase is required"));
+			return;
+		}
+
+		String storedPassphrase = System.getenv("CHOPPER_PASSPHRASE");
+		if (storedPassphrase == null || storedPassphrase.isEmpty()) {
+			LOGGER.log(Level.SEVERE, "CHOPPER_PASSPHRASE env variable is not set");
+			sendJson(response, 500, new JSONObject().put("error", "Server configuration error"));
+			return;
+		}
+
+		if (!passphrase.equals(storedPassphrase.trim())) {
+			sendJson(response, 401, new JSONObject().put("error", "Invalid passphrase"));
+			return;
+		}
+
+		// Issue JWT
+		String jwtSecret = System.getenv("CHOPPER_JWT_SECRET");
+		if (jwtSecret == null || jwtSecret.isEmpty()) {
+			LOGGER.log(Level.SEVERE, "CHOPPER_JWT_SECRET env variable is not set");
+			sendJson(response, 500, new JSONObject().put("error", "Server configuration error"));
+			return;
+		}
+
+		String token = signJwt(jwtSecret);
+		JSONObject res = new JSONObject();
+		res.put("token", token);
+		res.put("expiresIn", JWT_EXPIRY_SECONDS);
+		sendJson(response, 200, res);
+	}
+
+	// ── JWT Helpers ───────────────────────────────────────────────────────────────
+
+	/**
+	 * Signs an HS256 JWT with the given secret.
+	 * Payload: { "sub": "chopper-admin", "iat": <now>, "exp": <now + 24h> }
+	 */
+	private String signJwt(String secret) throws Exception {
+		long now = System.currentTimeMillis() / 1000L;
+		long exp = now + JWT_EXPIRY_SECONDS;
+
+		String header = base64UrlEncode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+		String payload = base64UrlEncode("{\"sub\":\"chopper-admin\",\"iat\":" + now + ",\"exp\":" + exp + "}");
+
+		String signingInput = header + "." + payload;
+		String signature = hmacSha256(signingInput, secret);
+
+		return signingInput + "." + signature;
+	}
+
+	/**
+	 * Validates the JWT from the X-Chopper-Token header.
+	 * Returns true if the token is valid and not expired.
+	 */
+	private boolean isValidJwt(HttpServletRequest request) {
+		String token = request.getHeader("X-Chopper-Token");
+		if (token == null || token.trim().isEmpty()) {
+			return false;
+		}
+		token = token.trim();
+
+		String jwtSecret = System.getenv("CHOPPER_JWT_SECRET");
+		if (jwtSecret == null || jwtSecret.isEmpty()) {
+			LOGGER.log(Level.SEVERE, "CHOPPER_JWT_SECRET env variable is not set");
+			return false;
+		}
+
+		try {
+			String[] parts = token.split("\\.");
+			if (parts.length != 3) return false;
+
+			// Verify signature
+			String signingInput = parts[0] + "." + parts[1];
+			String expectedSig = hmacSha256(signingInput, jwtSecret);
+			if (!expectedSig.equals(parts[2])) {
+				LOGGER.log(Level.WARNING, "JWT signature mismatch");
+				return false;
+			}
+
+			// Verify expiry
+			String payloadJson = new String(Base64.getUrlDecoder().decode(padBase64(parts[1])), StandardCharsets.UTF_8);
+			JSONObject payloadObj = new JSONObject(payloadJson);
+			long exp = payloadObj.optLong("exp", 0);
+			long now = System.currentTimeMillis() / 1000L;
+
+			if (exp == 0 || now > exp) {
+				LOGGER.log(Level.WARNING, "JWT expired");
+				return false;
+			}
+
+			return true;
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "JWT validation error: " + e.getMessage());
+			return false;
+		}
+	}
+
+	private String hmacSha256(String data, String secret) throws Exception {
+		Mac mac = Mac.getInstance("HmacSHA256");
+		SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+		mac.init(keySpec);
+		byte[] raw = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+		return Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
+	}
+
+	private String base64UrlEncode(String input) {
+		return Base64.getUrlEncoder().withoutPadding().encodeToString(input.getBytes(StandardCharsets.UTF_8));
+	}
+
+	private String padBase64(String base64url) {
+		int pad = base64url.length() % 4;
+		if (pad == 2) return base64url + "==";
+		if (pad == 3) return base64url + "=";
+		return base64url;
+	}
+
+	// ── Data Handlers ─────────────────────────────────────────────────────────────
 
 	private String formatDateTime(String dt) {
 		if (dt == null) return "";
@@ -168,7 +319,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 			item.put("id", getVal(row, "Reactions", "ROWID"));
 			item.put("symptomStartTime", getVal(row, "Reactions", "SymptomStartTime"));
 			item.put("severityLevel", getVal(row, "Reactions", "SeverityLevel"));
-			
+
 			Object symptomsRawObj = getVal(row, "Reactions", "Symptoms");
 			String symptomsRaw = symptomsRawObj != null ? symptomsRawObj.toString() : "";
 			if (!symptomsRaw.isEmpty()) {
@@ -297,7 +448,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 	private void handleGetDashboard(HttpServletRequest request, HttpServletResponse response) throws Exception {
 		JSONObject res = new JSONObject();
-		
+
 		try {
 			ArrayList<ZCRowObject> entryRows = ZCQL.getInstance().executeQuery("SELECT ROWID, EntryType, ItemName, LoggedAt, Notes, CREATEDTIME FROM LogEntries ORDER BY LoggedAt DESC");
 			JSONArray entriesArray = new JSONArray();
@@ -325,7 +476,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 				item.put("id", getVal(row, "Reactions", "ROWID"));
 				item.put("symptomStartTime", getVal(row, "Reactions", "SymptomStartTime"));
 				item.put("severityLevel", getVal(row, "Reactions", "SeverityLevel"));
-				
+
 				Object symptomsRawObj = getVal(row, "Reactions", "Symptoms");
 				String symptomsRaw = symptomsRawObj != null ? symptomsRawObj.toString() : "";
 				if (!symptomsRaw.isEmpty()) {
@@ -366,8 +517,45 @@ public class Sample implements CatalystAdvancedIOHandler {
 			res.put("confirmedTriggers", new JSONArray());
 		}
 
+		// Static user object — no Catalyst auth user needed
+		JSONObject userObj = new JSONObject();
+		userObj.put("first_name", "Admin");
+		userObj.put("email_id", "");
+		res.put("user", userObj);
+
+		LOGGER.log(Level.INFO, "Dashboard response size: entries=" +
+			res.optJSONArray("entries").length() + " reactions=" +
+			res.optJSONArray("reactions").length() + " triggers=" +
+			res.optJSONArray("confirmedTriggers").length());
 		sendJson(response, 200, res);
 	}
+
+	// ── Path Extraction ───────────────────────────────────────────────────────────
+
+	/**
+	 * Extracts the last path segment from a URI for strict route matching.
+	 * Strips the query string first, then returns the token after the final '/'.
+	 * Examples:
+	 *   "/server/chopper_api/execute/auth"       -> "auth"
+	 *   "/server/chopper_api/execute/entries?id=1" -> "entries"
+	 *   "/server/chopper_api/execute/"           -> ""
+	 */
+	private String extractPath(String uri) {
+		// Strip query string
+		int queryIdx = uri.indexOf('?');
+		String path = queryIdx >= 0 ? uri.substring(0, queryIdx) : uri;
+
+		// Strip trailing slash
+		if (path.endsWith("/")) {
+			path = path.substring(0, path.length() - 1);
+		}
+
+		// Return last segment after the final '/'
+		int lastSlash = path.lastIndexOf('/');
+		return lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
+	}
+
+	// ── Shared Utilities ──────────────────────────────────────────────────────────
 
 	private Object getVal(ZCRowObject row, String tableName, String columnName) {
 		try {
