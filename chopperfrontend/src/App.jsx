@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   fetchDashboardData,
   addLogEntry,
@@ -39,12 +39,14 @@ export default function App() {
   const [data, setData] = useState({ entries: [], reactions: [], confirmedTriggers: [] });
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [viewMode, setViewMode] = useState('dashboard'); // 'dashboard' | 'day_detail'
 
   // Passphrase Auth
   const [authUser, setAuthUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [passphraseInput, setPassphraseInput] = useState('');
+  const [showPassphrase, setShowPassphrase] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
 
@@ -155,9 +157,16 @@ export default function App() {
     setData({ entries: [], reactions: [], confirmedTriggers: [] });
   };
 
+  const wrapperRef = useRef(null);
+  const todayStr = new Date().toISOString().split('T')[0];
+
   // Open Log Entry Modal (Create or Pre-fill)
   const openNewLogModal = (overrideDate) => {
     const targetDate = overrideDate || selectedDate;
+    if (targetDate > todayStr) {
+      alert('Cannot log items for future dates.');
+      return;
+    }
     setEditingEntryId(null);
     setEntryForm({
       entryType: 'food',
@@ -183,6 +192,10 @@ export default function App() {
   // Open Reaction Modal (Create or Pre-fill)
   const openNewReactionModal = (overrideDate) => {
     const targetDate = overrideDate || selectedDate;
+    if (targetDate > todayStr) {
+      alert('Cannot log reactions for future dates.');
+      return;
+    }
     setEditingReactionId(null);
     setReactionForm({
       symptomStartTime: getInitialFormDateTime(targetDate),
@@ -232,17 +245,89 @@ export default function App() {
     return map;
   }, [data]);
 
-  // Calendar dates (past 180 days / ~26 weeks)
-  const calendarDates = useMemo(() => {
-    const dates = [];
-    const today = new Date();
-    for (let i = 181; i >= 0; i--) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      dates.push(d.toISOString().split('T')[0]);
-    }
-    return dates;
+  // Available years for heatmap selector
+  const availableYears = useMemo(() => {
+    const currentY = new Date().getFullYear();
+    return [currentY, currentY - 1, currentY - 2];
   }, []);
+
+  // Total activity count for selected year
+  const yearActivityCount = useMemo(() => {
+    let count = 0;
+    const yearStr = String(selectedYear);
+    (data.entries || []).forEach(e => {
+      if (parseDateKey(e.loggedAt).startsWith(yearStr)) count++;
+    });
+    (data.reactions || []).forEach(r => {
+      if (parseDateKey(r.symptomStartTime).startsWith(yearStr)) count++;
+    });
+    return count;
+  }, [data, selectedYear]);
+
+  // GitHub-style 53-week x 7-row matrix for selected year with Month Labels
+  const { weeks, monthLabels } = useMemo(() => {
+    const year = selectedYear;
+    const startDate = new Date(year, 0, 1); // Jan 1
+    const endDate = new Date(year, 11, 31); // Dec 31
+
+    // Align to preceding Sunday
+    const current = new Date(startDate);
+    const startDay = current.getDay(); // 0 (Sun) - 6 (Sat)
+    current.setDate(current.getDate() - startDay);
+
+    const weeksList = [];
+    let currentWeek = [];
+    const labels = [];
+    let lastMonth = -1;
+
+    while (current <= endDate || (currentWeek.length > 0 && currentWeek.length < 7)) {
+      const dateStr = current.toISOString().split('T')[0];
+      const isTargetYear = current.getFullYear() === year;
+      const month = current.getMonth();
+
+      if (isTargetYear && month !== lastMonth && current.getDate() <= 7) {
+        labels.push({
+          colIndex: weeksList.length,
+          label: current.toLocaleString('en-US', { month: 'short' })
+        });
+        lastMonth = month;
+      }
+
+      currentWeek.push({
+        dateKey: dateStr,
+        isTargetYear
+      });
+
+      if (currentWeek.length === 7) {
+        weeksList.push(currentWeek);
+        currentWeek = [];
+        if (current > endDate) break;
+      }
+
+      current.setDate(current.getDate() + 1);
+    }
+
+    return { weeks: weeksList, monthLabels: labels };
+  }, [selectedYear]);
+
+  // Auto-scroll heatmap wrapper to today's date / current month on load / year change
+  useEffect(() => {
+    if (wrapperRef.current) {
+      if (selectedYear === new Date().getFullYear()) {
+        const targetWeekIdx = weeks.findIndex(w => w.some(d => d.dateKey === todayStr));
+        if (targetWeekIdx !== -1) {
+          // Each week column is 13px + 3px gap = 16px. Day labels spacer is 28px.
+          const colOffset = 28 + (targetWeekIdx * 16);
+          const scrollPos = colOffset - (wrapperRef.current.clientWidth / 2) + 16;
+          wrapperRef.current.scrollLeft = Math.max(0, scrollPos);
+        } else {
+          wrapperRef.current.scrollLeft = wrapperRef.current.scrollWidth;
+        }
+      } else {
+        wrapperRef.current.scrollLeft = 0;
+      }
+    }
+  }, [selectedYear, viewMode, authUser, weeks, todayStr]);
 
   // Co-occurrence Analysis (Flagged Foods)
   const flaggedItems = useMemo(() => {
@@ -338,7 +423,6 @@ export default function App() {
     return '';
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
   const selectedDayInfo = daySummaryMap[selectedDate] || { entries: [], reactions: [], maxSeverity: 0 };
 
   return (
@@ -391,16 +475,40 @@ export default function App() {
               Enter your passphrase to access your allergy & food logs.
             </p>
             <form onSubmit={handlePassphraseLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <input
-                type="password"
-                className="form-control"
-                placeholder="Enter passphrase…"
-                value={passphraseInput}
-                onChange={e => setPassphraseInput(e.target.value)}
-                autoFocus
-                required
-                style={{ textAlign: 'center', letterSpacing: '0.15em', fontSize: '1rem' }}
-              />
+              <div style={{ position: 'relative', width: '100%' }}>
+                <input
+                  type={showPassphrase ? 'text' : 'password'}
+                  className="form-control"
+                  placeholder="Enter passphrase…"
+                  value={passphraseInput}
+                  onChange={e => setPassphraseInput(e.target.value)}
+                  autoFocus
+                  required
+                  style={{ textAlign: 'center', letterSpacing: '0.15em', fontSize: '1rem', paddingRight: '2.5rem' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassphrase(!showPassphrase)}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    fontSize: '1.1rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '4px'
+                  }}
+                  title={showPassphrase ? 'Hide passphrase' : 'Show passphrase'}
+                >
+                  {showPassphrase ? '👁️' : '🙈'}
+                </button>
+              </div>
               {loginError && (
                 <div style={{ color: '#fca5a5', fontSize: '0.875rem', background: 'rgba(239,68,68,0.1)', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
                   {loginError}
@@ -419,37 +527,108 @@ export default function App() {
         </div>
       ) : viewMode === 'dashboard' ? (
         <main className="dashboard-grid">
-          {/* Calendar Heatmap Card */}
-          <div className="card heatmap-container">
-            <div className="card-title">
-              <span>6-Month Activity & Allergy Frequency</span>
-              <div className="heatmap-legend">
-                <div className="legend-item"><div className="color-box empty"></div> No data</div>
-                <div className="legend-item"><div className="color-box safe"></div> No allergy</div>
-                <div className="legend-item"><div className="color-box mild"></div> Mild (1-2)</div>
-                <div className="legend-item"><div className="color-box severe"></div> Severe (3-5)</div>
+          {/* GitHub-style Year Activity Heatmap Card */}
+          <div className="card github-heatmap-card">
+            <div className="github-heatmap-header">
+              <div className="github-heatmap-title">
+                <span className="count-badge">{yearActivityCount}</span> activities logged in {selectedYear}
+              </div>
+              <div className="year-selector-pills">
+                {availableYears.map(y => (
+                  <button
+                    key={y}
+                    className={`year-pill ${selectedYear === y ? 'active' : ''}`}
+                    onClick={() => setSelectedYear(y)}
+                  >
+                    {y}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="heatmap-grid">
-              {calendarDates.map(dateKey => {
-                const statusClass = getDayStatusClass(dateKey);
-                const info = daySummaryMap[dateKey];
-                const countEntries = info ? info.entries.length : 0;
-                const countReactions = info ? info.reactions.length : 0;
+            <div className="github-heatmap-wrapper" ref={wrapperRef}>
+              <div className="github-heatmap-inner">
+                {/* Month Labels Row */}
+                <div className="month-labels-row">
+                  <div className="day-label-spacer" />
+                  <div className="month-labels-grid">
+                    {monthLabels.map((m, idx) => (
+                      <span
+                        key={idx}
+                        className="month-label"
+                        style={{ gridColumnStart: m.colIndex + 1 }}
+                      >
+                        {m.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
 
-                return (
-                  <div
-                    key={dateKey}
-                    className={`heatmap-cell ${statusClass} ${selectedDate === dateKey ? 'selected' : ''}`}
-                    title={`${dateKey}: ${countEntries} items logged, ${countReactions} reactions`}
-                    onClick={() => {
-                      setSelectedDate(dateKey);
-                      setViewMode('day_detail');
-                    }}
-                  />
-                );
-              })}
+                {/* Grid Body: Day labels + 53 week columns */}
+                <div className="github-heatmap-body">
+                  <div className="day-labels-column">
+                    <span></span>
+                    <span>Mon</span>
+                    <span></span>
+                    <span>Wed</span>
+                    <span></span>
+                    <span>Fri</span>
+                    <span></span>
+                  </div>
+
+                  <div className="weeks-flex">
+                    {weeks.map((week, weekIdx) => (
+                      <div key={weekIdx} className="week-column">
+                        {week.map((day) => {
+                          if (!day.isTargetYear) {
+                            return <div key={day.dateKey} className="heatmap-cell empty-day" />;
+                          }
+                          const isFuture = day.dateKey > todayStr;
+                          if (isFuture) {
+                            return (
+                              <div
+                                key={day.dateKey}
+                                className="heatmap-cell future-day"
+                                title={`${day.dateKey}: Future date (cannot log)`}
+                              />
+                            );
+                          }
+                          const statusClass = getDayStatusClass(day.dateKey);
+                          const info = daySummaryMap[day.dateKey];
+                          const countEntries = info ? info.entries.length : 0;
+                          const countReactions = info ? info.reactions.length : 0;
+
+                          return (
+                            <div
+                              key={day.dateKey}
+                              className={`heatmap-cell ${statusClass} ${selectedDate === day.dateKey ? 'selected' : ''}`}
+                              title={`${day.dateKey}: ${countEntries} items, ${countReactions} reactions`}
+                              onClick={() => {
+                                setSelectedDate(day.dateKey);
+                                setViewMode('day_detail');
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="github-heatmap-footer">
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                Click any cell to inspect or add logs for that date
+              </span>
+              <div className="heatmap-legend">
+                <span>Less</span>
+                <div className="legend-item"><div className="color-box empty" /></div>
+                <div className="legend-item"><div className="color-box safe" /></div>
+                <div className="legend-item"><div className="color-box mild" /></div>
+                <div className="legend-item"><div className="color-box severe" /></div>
+                <span>More</span>
+              </div>
             </div>
           </div>
 
@@ -722,6 +901,7 @@ export default function App() {
                 <input
                   type="datetime-local"
                   className="form-control"
+                  max={getInitialFormDateTime(todayStr)}
                   value={entryForm.loggedAt}
                   onChange={e => setEntryForm({ ...entryForm, loggedAt: e.target.value })}
                   required
@@ -762,6 +942,7 @@ export default function App() {
                 <input
                   type="datetime-local"
                   className="form-control"
+                  max={getInitialFormDateTime(todayStr)}
                   value={reactionForm.symptomStartTime}
                   onChange={e => setReactionForm({ ...reactionForm, symptomStartTime: e.target.value })}
                   required

@@ -25,4 +25,10 @@ lib/
 # OS metadata
 .DS_Store
 Thumbs.db
+# Environment variables & secrets
+.env
+.env.*
 chopperfrontend/.env.*
+functions/*/.env
+.build/*
+

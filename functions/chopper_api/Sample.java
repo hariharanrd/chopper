@@ -1,9 +1,14 @@
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,6 +34,8 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 	@Override
 	public void runner(HttpServletRequest request, HttpServletResponse response) throws Exception {
+		handleLocalCors(request, response);
+
 		String method = request.getMethod().toUpperCase();
 
 		// Always handle CORS preflight
@@ -120,7 +127,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 			return;
 		}
 
-		String storedPassphrase = System.getenv("CHOPPER_PASSPHRASE");
+		String storedPassphrase = getEnv("CHOPPER_PASSPHRASE");
 		if (storedPassphrase == null || storedPassphrase.isEmpty()) {
 			LOGGER.log(Level.SEVERE, "CHOPPER_PASSPHRASE env variable is not set");
 			sendJson(response, 500, new JSONObject().put("error", "Server configuration error"));
@@ -133,7 +140,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		}
 
 		// Issue JWT
-		String jwtSecret = System.getenv("CHOPPER_JWT_SECRET");
+		String jwtSecret = getEnv("CHOPPER_JWT_SECRET");
 		if (jwtSecret == null || jwtSecret.isEmpty()) {
 			LOGGER.log(Level.SEVERE, "CHOPPER_JWT_SECRET env variable is not set");
 			sendJson(response, 500, new JSONObject().put("error", "Server configuration error"));
@@ -177,7 +184,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		}
 		token = token.trim();
 
-		String jwtSecret = System.getenv("CHOPPER_JWT_SECRET");
+		String jwtSecret = getEnv("CHOPPER_JWT_SECRET");
 		if (jwtSecret == null || jwtSecret.isEmpty()) {
 			LOGGER.log(Level.SEVERE, "CHOPPER_JWT_SECRET env variable is not set");
 			return false;
@@ -243,6 +250,19 @@ public class Sample implements CatalystAdvancedIOHandler {
 		return clean;
 	}
 
+	private boolean isFutureDateTime(String dtStr) {
+		if (dtStr == null || dtStr.trim().isEmpty()) return false;
+		try {
+			String clean = dtStr.trim().replace("T", " ");
+			String datePart = clean.split(" ")[0];
+			LocalDate today = LocalDate.now();
+			LocalDate targetDate = LocalDate.parse(datePart);
+			return targetDate.isAfter(today);
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
 	private void handleGetEntries(HttpServletRequest request, HttpServletResponse response) throws Exception {
 		ArrayList<ZCRowObject> rows = ZCQL.getInstance().executeQuery("SELECT ROWID, EntryType, ItemName, LoggedAt, Notes, CREATEDTIME FROM LogEntries ORDER BY LoggedAt DESC");
 		JSONArray jsonArray = new JSONArray();
@@ -269,6 +289,11 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 		if (itemName.isEmpty() || loggedAt.isEmpty()) {
 			sendJson(response, 400, new JSONObject().put("error", "itemName and loggedAt are required"));
+			return;
+		}
+
+		if (isFutureDateTime(loggedAt)) {
+			sendJson(response, 400, new JSONObject().put("error", "Cannot add or update log entries for future dates"));
 			return;
 		}
 
@@ -353,6 +378,11 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 		if (symptomStartTime.isEmpty()) {
 			sendJson(response, 400, new JSONObject().put("error", "symptomStartTime is required"));
+			return;
+		}
+
+		if (isFutureDateTime(symptomStartTime)) {
+			sendJson(response, 400, new JSONObject().put("error", "Cannot add or update reactions for future dates"));
 			return;
 		}
 
@@ -586,5 +616,32 @@ public class Sample implements CatalystAdvancedIOHandler {
 		response.setContentType("application/json");
 		response.setCharacterEncoding("UTF-8");
 		response.getWriter().write(json.toString());
+	}
+
+
+	/**
+	 * Retrieves an environment variable. Reads System.getenv() first.
+	 * Falls back to reading local .env file ONLY when running locally.
+	 */
+	private static synchronized String getEnv(String key) {
+		String val = System.getenv(key);
+		if (val != null && !val.trim().isEmpty()) {
+			return val.trim();
+		}
+		return null;
+	}
+
+	/**
+	 * Sets CORS headers strictly for local development requests (localhost / 127.0.0.1).
+	 * In production, Catalyst Console CORS configuration handles headers automatically.
+	 */
+	private void handleLocalCors(HttpServletRequest request, HttpServletResponse response) {
+		String origin = request.getHeader("Origin");
+		if (origin != null && (origin.contains("localhost") || origin.contains("127.0.0.1"))) {
+			response.setHeader("Access-Control-Allow-Origin", origin);
+			response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+			response.setHeader("Access-Control-Allow-Headers", "X-Chopper-Token, Content-Type, Authorization");
+			response.setHeader("Access-Control-Max-Age", "86400");
+		}
 	}
 }
