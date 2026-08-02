@@ -94,13 +94,49 @@ export async function fetchDashboardData() {
     });
     if (res.status === 401) {
       clearToken();
-      return { entries: [], reactions: [], confirmedTriggers: [], unauthenticated: true };
+      return { entries: [], reactions: [], confirmedTriggers: [], suspectedTriggers: [], unauthenticated: true };
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
     console.warn('API error:', err.message);
-    return { entries: [], reactions: [], confirmedTriggers: [], error: err.message };
+    return { entries: [], reactions: [], confirmedTriggers: [], suspectedTriggers: [], error: err.message };
+  }
+}
+
+export async function fetchHeatmapData(monthStr) {
+  try {
+    const res = await fetch(`${BASE_URL}/heatmap?month=${monthStr}`, {
+      method: 'GET',
+      headers: getAuthHeaders()
+    });
+    if (res.status === 401) {
+      clearToken();
+      return { days: {}, confirmedTriggers: [], suspectedTriggers: [], unauthenticated: true };
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('API error fetching heatmap:', err.message);
+    return { days: {}, confirmedTriggers: [], suspectedTriggers: [], error: err.message };
+  }
+}
+
+export async function fetchDayDetails(dateStr) {
+  try {
+    const res = await fetch(`${BASE_URL}/day-details?date=${dateStr}`, {
+      method: 'GET',
+      headers: getAuthHeaders()
+    });
+    if (res.status === 401) {
+      clearToken();
+      return { entries: [], reactions: [], unauthenticated: true };
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('API error fetching day details:', err.message);
+    return { entries: [], reactions: [], error: err.message };
   }
 }
 
@@ -190,6 +226,58 @@ export async function addConfirmedTrigger(itemName) {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ itemName, confirmedAt: new Date().toISOString() })
+    });
+    if (res.status === 401) {
+      clearToken();
+      return { error: 'unauthenticated' };
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+export async function deleteConfirmedTrigger(id) {
+  try {
+    const res = await fetch(`${BASE_URL}/triggers?id=${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
+    if (res.status === 401) {
+      clearToken();
+      return { error: 'unauthenticated' };
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+export async function addSuspectedTrigger(itemName) {
+  try {
+    const res = await fetch(`${BASE_URL}/suspected-triggers`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ itemName, suspectedAt: new Date().toISOString() })
+    });
+    if (res.status === 401) {
+      clearToken();
+      return { error: 'unauthenticated' };
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+export async function deleteSuspectedTrigger(id) {
+  try {
+    const res = await fetch(`${BASE_URL}/suspected-triggers?id=${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
     });
     if (res.status === 401) {
       clearToken();
