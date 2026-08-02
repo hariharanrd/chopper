@@ -5,11 +5,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -103,9 +105,37 @@ public class Sample implements CatalystAdvancedIOHandler {
 				} else {
 					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
 				}
+			} else if ("suspected-triggers".equals(path)) {
+				if ("GET".equals(method)) {
+					handleGetSuspectedTriggers(request, response);
+				} else if ("POST".equals(method)) {
+					handlePostSuspectedTrigger(request, response);
+				} else if ("DELETE".equals(method)) {
+					handleDeleteSuspectedTrigger(request, response);
+				} else {
+					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
+				}
+			} else if ("heatmap".equals(path)) {
+				if ("GET".equals(method)) {
+					handleGetHeatmap(request, response);
+				} else {
+					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
+				}
+			} else if ("day-details".equals(path)) {
+				if ("GET".equals(method)) {
+					handleGetDayDetails(request, response);
+				} else {
+					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
+				}
 			} else if ("dashboard".equals(path) || path.isEmpty()) {
 				if ("GET".equals(method)) {
-					handleGetDashboard(request, response);
+					if (request.getParameter("month") != null) {
+						handleGetHeatmap(request, response);
+					} else if (request.getParameter("date") != null) {
+						handleGetDayDetails(request, response);
+					} else {
+						handleGetDashboard(request, response);
+					}
 				} else {
 					sendJson(response, 405, new JSONObject().put("error", "Method not allowed"));
 				}
@@ -129,7 +159,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 			return;
 		}
 
-		String storedPassphrase = getEnv("CHOPPER_PASSPHRASE");
+		String storedPassphrase = getEnv("CHOPPER_PASSPHRASE",null);
 		if (storedPassphrase == null || storedPassphrase.isEmpty()) {
 			LOGGER.log(Level.SEVERE, "CHOPPER_PASSPHRASE env variable is not set");
 			sendJson(response, 500, new JSONObject().put("error", "Server configuration error"));
@@ -142,7 +172,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		}
 
 		// Issue JWT
-		String jwtSecret = getEnv("CHOPPER_JWT_SECRET");
+		String jwtSecret = getEnv("CHOPPER_JWT_SECRET",null);
 		if (jwtSecret == null || jwtSecret.isEmpty()) {
 			LOGGER.log(Level.SEVERE, "CHOPPER_JWT_SECRET env variable is not set");
 			sendJson(response, 500, new JSONObject().put("error", "Server configuration error"));
@@ -186,7 +216,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		}
 		token = token.trim();
 
-		String jwtSecret = getEnv("CHOPPER_JWT_SECRET");
+		String jwtSecret = getEnv("CHOPPER_JWT_SECRET",null);
 		if (jwtSecret == null || jwtSecret.isEmpty()) {
 			LOGGER.log(Level.SEVERE, "CHOPPER_JWT_SECRET env variable is not set");
 			return false;
@@ -493,6 +523,260 @@ public class Sample implements CatalystAdvancedIOHandler {
 		sendJson(response, 200, new JSONObject().put("success", true));
 	}
 
+	private void handleGetSuspectedTriggers(HttpServletRequest request, HttpServletResponse response) throws Exception {
+		ArrayList<ZCRowObject> rows = ZCQL.getInstance().executeQuery("SELECT ROWID, ItemName, SuspectedAt FROM SuspectedTriggers");
+		JSONArray jsonArray = new JSONArray();
+		for (ZCRowObject row : rows) {
+			JSONObject item = new JSONObject();
+			item.put("id", getVal(row, "SuspectedTriggers", "ROWID"));
+			item.put("itemName", getVal(row, "SuspectedTriggers", "ItemName"));
+			item.put("suspectedAt", getVal(row, "SuspectedTriggers", "SuspectedAt"));
+			jsonArray.put(item);
+		}
+		sendJson(response, 200, new JSONObject().put("suspectedTriggers", jsonArray));
+	}
+
+	private void handlePostSuspectedTrigger(HttpServletRequest request, HttpServletResponse response) throws Exception {
+		JSONObject body = parseBody(request);
+		String itemName = body.optString("itemName", "").trim();
+		String suspectedAt = formatDateTime(body.optString("suspectedAt", ""));
+		if (suspectedAt.isEmpty()) {
+			suspectedAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+		}
+
+		if (itemName.isEmpty()) {
+			sendJson(response, 400, new JSONObject().put("error", "itemName is required"));
+			return;
+		}
+
+		ZCRowObject row = ZCRowObject.getInstance();
+		row.set("ItemName", itemName);
+		row.set("SuspectedAt", suspectedAt);
+
+		ZCTable table = ZCObject.getInstance().getTable("SuspectedTriggers");
+		ZCRowObject insertedRow = table.insertRow(row);
+
+		JSONObject res = new JSONObject();
+		res.put("success", true);
+		res.put("id", getVal(insertedRow, "SuspectedTriggers", "ROWID"));
+		sendJson(response, 201, res);
+	}
+
+	private void handleDeleteSuspectedTrigger(HttpServletRequest request, HttpServletResponse response) throws Exception {
+		String idStr = request.getParameter("id");
+		if (idStr == null || idStr.isEmpty()) {
+			sendJson(response, 400, new JSONObject().put("error", "Missing id parameter"));
+			return;
+		}
+		Long rowId = Long.parseLong(idStr);
+		ZCObject.getInstance().getTable("SuspectedTriggers").deleteRow(rowId);
+		sendJson(response, 200, new JSONObject().put("success", true));
+	}
+
+	private String parseDateKey(String dtStr) {
+		if (dtStr == null || dtStr.trim().isEmpty()) return "";
+		String clean = dtStr.trim().replace("T", " ");
+		return clean.split(" ")[0];
+	}
+
+	private void handleGetHeatmap(HttpServletRequest request, HttpServletResponse response) throws Exception {
+		String monthParam = request.getParameter("month"); // Format "YYYY-MM"
+		if (monthParam == null || monthParam.trim().isEmpty() || !monthParam.trim().matches("\\d{4}-\\d{2}")) {
+			monthParam = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM"));
+		}
+		monthParam = monthParam.trim();
+		String startDt = monthParam + "-01 00:00:00";
+
+		String[] parts = monthParam.split("-");
+		int year = Integer.parseInt(parts[0]);
+		int month = Integer.parseInt(parts[1]);
+		YearMonth ym = YearMonth.of(year, month);
+		int lastDay = ym.lengthOfMonth();
+		String endDt = String.format("%s-%02d 23:59:59", monthParam, lastDay);
+
+		JSONObject daysMap = new JSONObject();
+
+		// Query LogEntries for the month
+		try {
+			String entriesQuery = "SELECT LoggedAt FROM LogEntries WHERE LoggedAt >= '" + startDt + "' AND LoggedAt <= '" + endDt + "'";
+			ArrayList<ZCRowObject> entryRows = ZCQL.getInstance().executeQuery(entriesQuery);
+			for (ZCRowObject row : entryRows) {
+				Object loggedAtObj = getVal(row, "LogEntries", "LoggedAt");
+				if (loggedAtObj != null) {
+					String dateKey = parseDateKey(loggedAtObj.toString());
+					if (!dateKey.isEmpty()) {
+						JSONObject dayObj = daysMap.optJSONObject(dateKey);
+						if (dayObj == null) {
+							dayObj = new JSONObject();
+							dayObj.put("entriesCount", 0);
+							dayObj.put("reactionsCount", 0);
+							dayObj.put("maxSeverity", 0);
+							daysMap.put(dateKey, dayObj);
+						}
+						dayObj.put("entriesCount", dayObj.getInt("entriesCount") + 1);
+					}
+				}
+			}
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "Error querying entries for heatmap", e);
+		}
+
+		// Query Reactions for the month
+		try {
+			String reactionsQuery = "SELECT SymptomStartTime, SeverityLevel FROM Reactions WHERE SymptomStartTime >= '" + startDt + "' AND SymptomStartTime <= '" + endDt + "'";
+			ArrayList<ZCRowObject> reactionRows = ZCQL.getInstance().executeQuery(reactionsQuery);
+			for (ZCRowObject row : reactionRows) {
+				Object startObj = getVal(row, "Reactions", "SymptomStartTime");
+				Object sevObj = getVal(row, "Reactions", "SeverityLevel");
+				if (startObj != null) {
+					String dateKey = parseDateKey(startObj.toString());
+					if (!dateKey.isEmpty()) {
+						JSONObject dayObj = daysMap.optJSONObject(dateKey);
+						if (dayObj == null) {
+							dayObj = new JSONObject();
+							dayObj.put("entriesCount", 0);
+							dayObj.put("reactionsCount", 0);
+							dayObj.put("maxSeverity", 0);
+							daysMap.put(dateKey, dayObj);
+						}
+						int sev = 1;
+						if (sevObj != null) {
+							try { sev = Integer.parseInt(sevObj.toString()); } catch (Exception ignored) {}
+						}
+						dayObj.put("reactionsCount", dayObj.getInt("reactionsCount") + 1);
+						if (sev > dayObj.getInt("maxSeverity")) {
+							dayObj.put("maxSeverity", sev);
+						}
+					}
+				}
+			}
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "Error querying reactions for heatmap", e);
+		}
+
+		// Determine status colors for each date
+		Iterator<String> keys = daysMap.keys();
+		while (keys.hasNext()) {
+			String dKey = keys.next();
+			JSONObject dayObj = daysMap.getJSONObject(dKey);
+			int rCount = dayObj.getInt("reactionsCount");
+			int eCount = dayObj.getInt("entriesCount");
+			int maxSev = dayObj.getInt("maxSeverity");
+			if (rCount > 0) {
+				dayObj.put("status", maxSev >= 3 ? "status-severe" : "status-mild");
+			} else if (eCount > 0) {
+				dayObj.put("status", "status-safe");
+			} else {
+				dayObj.put("status", "");
+			}
+		}
+
+		// Suspected Triggers
+		JSONArray suspectedArray = new JSONArray();
+		try {
+			ArrayList<ZCRowObject> sRows = ZCQL.getInstance().executeQuery("SELECT ROWID, ItemName, SuspectedAt FROM SuspectedTriggers");
+			for (ZCRowObject row : sRows) {
+				JSONObject item = new JSONObject();
+				item.put("id", getVal(row, "SuspectedTriggers", "ROWID"));
+				item.put("itemName", getVal(row, "SuspectedTriggers", "ItemName"));
+				item.put("suspectedAt", getVal(row, "SuspectedTriggers", "SuspectedAt"));
+				suspectedArray.put(item);
+			}
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "Error querying SuspectedTriggers", e);
+		}
+
+		// Confirmed Triggers
+		JSONArray confirmedArray = new JSONArray();
+		try {
+			ArrayList<ZCRowObject> cRows = ZCQL.getInstance().executeQuery("SELECT ROWID, ItemName, ConfirmedAt FROM ConfirmedTriggers");
+			for (ZCRowObject row : cRows) {
+				JSONObject item = new JSONObject();
+				item.put("id", getVal(row, "ConfirmedTriggers", "ROWID"));
+				item.put("itemName", getVal(row, "ConfirmedTriggers", "ItemName"));
+				item.put("confirmedAt", getVal(row, "ConfirmedTriggers", "ConfirmedAt"));
+				confirmedArray.put(item);
+			}
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "Error querying ConfirmedTriggers", e);
+		}
+
+		JSONObject res = new JSONObject();
+		res.put("month", monthParam);
+		res.put("days", daysMap);
+		res.put("suspectedTriggers", suspectedArray);
+		res.put("confirmedTriggers", confirmedArray);
+		sendJson(response, 200, res);
+	}
+
+	private void handleGetDayDetails(HttpServletRequest request, HttpServletResponse response) throws Exception {
+		String dateParam = request.getParameter("date");
+		if (dateParam == null || dateParam.trim().isEmpty()) {
+			dateParam = LocalDate.now().toString();
+		}
+		dateParam = dateParam.trim();
+		String startDt = dateParam + " 00:00:00";
+		String endDt = dateParam + " 23:59:59";
+
+		JSONArray entriesArray = new JSONArray();
+		try {
+			String entriesQuery = "SELECT ROWID, EntryType, ItemName, LoggedAt, Notes, CREATEDTIME FROM LogEntries WHERE LoggedAt >= '" + startDt + "' AND LoggedAt <= '" + endDt + "' ORDER BY LoggedAt DESC";
+			ArrayList<ZCRowObject> entryRows = ZCQL.getInstance().executeQuery(entriesQuery);
+			for (ZCRowObject row : entryRows) {
+				JSONObject item = new JSONObject();
+				item.put("id", getVal(row, "LogEntries", "ROWID"));
+				item.put("entryType", getVal(row, "LogEntries", "EntryType"));
+				item.put("itemName", getVal(row, "LogEntries", "ItemName"));
+				item.put("loggedAt", getVal(row, "LogEntries", "LoggedAt"));
+				item.put("notes", getVal(row, "LogEntries", "Notes"));
+				item.put("createdAt", getVal(row, "LogEntries", "CREATEDTIME"));
+				entriesArray.put(item);
+			}
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "Error querying entries for date " + dateParam, e);
+		}
+
+		JSONArray reactionsArray = new JSONArray();
+		try {
+			String reactionsQuery = "SELECT ROWID, SymptomStartTime, SeverityLevel, Symptoms, Resolution, ResolvedInMinutes, Notes, CREATEDTIME FROM Reactions WHERE SymptomStartTime >= '" + startDt + "' AND SymptomStartTime <= '" + endDt + "' ORDER BY SymptomStartTime DESC";
+			ArrayList<ZCRowObject> reactionRows = ZCQL.getInstance().executeQuery(reactionsQuery);
+			for (ZCRowObject row : reactionRows) {
+				JSONObject item = new JSONObject();
+				item.put("id", getVal(row, "Reactions", "ROWID"));
+				item.put("symptomStartTime", getVal(row, "Reactions", "SymptomStartTime"));
+				item.put("severityLevel", getVal(row, "Reactions", "SeverityLevel"));
+
+				Object symptomsRawObj = getVal(row, "Reactions", "Symptoms");
+				String symptomsRaw = symptomsRawObj != null ? symptomsRawObj.toString() : "";
+				if (!symptomsRaw.isEmpty()) {
+					try {
+						item.put("symptoms", new JSONArray(symptomsRaw));
+					} catch (Exception ex) {
+						item.put("symptoms", new JSONArray().put(symptomsRaw));
+					}
+				} else {
+					item.put("symptoms", new JSONArray());
+				}
+
+				item.put("resolution", getVal(row, "Reactions", "Resolution"));
+				item.put("resolvedInMinutes", getVal(row, "Reactions", "ResolvedInMinutes"));
+				item.put("notes", getVal(row, "Reactions", "Notes"));
+				item.put("createdAt", getVal(row, "Reactions", "CREATEDTIME"));
+				reactionsArray.put(item);
+			}
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "Error querying reactions for date " + dateParam, e);
+		}
+
+		JSONObject res = new JSONObject();
+		res.put("date", dateParam);
+		res.put("entriesCount", entriesArray.length());
+		res.put("reactionsCount", reactionsArray.length());
+		res.put("entries", entriesArray);
+		res.put("reactions", reactionsArray);
+		sendJson(response, 200, res);
+	}
+
 	private void handleGetDashboard(HttpServletRequest request, HttpServletResponse response) throws Exception {
 		JSONObject res = new JSONObject();
 
@@ -564,9 +848,25 @@ public class Sample implements CatalystAdvancedIOHandler {
 			res.put("confirmedTriggers", new JSONArray());
 		}
 
+		try {
+			ArrayList<ZCRowObject> sRows = ZCQL.getInstance().executeQuery("SELECT ROWID, ItemName, SuspectedAt FROM SuspectedTriggers");
+			JSONArray suspectedArray = new JSONArray();
+			for (ZCRowObject row : sRows) {
+				JSONObject item = new JSONObject();
+				item.put("id", getVal(row, "SuspectedTriggers", "ROWID"));
+				item.put("itemName", getVal(row, "SuspectedTriggers", "ItemName"));
+				item.put("suspectedAt", getVal(row, "SuspectedTriggers", "SuspectedAt"));
+				suspectedArray.put(item);
+			}
+			res.put("suspectedTriggers", suspectedArray);
+		} catch (Exception e) {
+			LOGGER.log(Level.WARNING, "Failed fetching SuspectedTriggers in dashboard", e);
+			res.put("suspectedTriggers", new JSONArray());
+		}
+
 		// Static user object — no Catalyst auth user needed
 		JSONObject userObj = new JSONObject();
-		userObj.put("first_name", "Admin");
+		userObj.put("first_name", getEnv("CHPPER_USER","Admin"));
 		userObj.put("email_id", "");
 		res.put("user", userObj);
 
@@ -640,12 +940,12 @@ public class Sample implements CatalystAdvancedIOHandler {
 	 * Retrieves an environment variable. Reads System.getenv() first.
 	 * Falls back to reading local .env file ONLY when running locally.
 	 */
-	private static synchronized String getEnv(String key) {
+	private static synchronized String getEnv(String key, String defaultValue) {
 		String val = System.getenv(key);
 		if (val != null && !val.trim().isEmpty()) {
 			return val.trim();
 		}
-		return null;
+		return defaultValue;
 	}
 
 	/**
