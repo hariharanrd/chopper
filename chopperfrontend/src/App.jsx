@@ -35,6 +35,28 @@ const getInitialFormDateTime = (targetDateStr) => {
   return now.toISOString().slice(0, 16);
 };
 
+const calculateResolvedAt = (symptomStartStr, minutes) => {
+  if (!symptomStartStr) return getInitialFormDateTime();
+  const start = new Date(String(symptomStartStr).replace(' ', 'T'));
+  if (isNaN(start.getTime())) return getInitialFormDateTime();
+  const end = new Date(start.getTime() + (parseInt(minutes || 0, 10)) * 60000);
+  const year = end.getFullYear();
+  const month = String(end.getMonth() + 1).padStart(2, '0');
+  const day = String(end.getDate()).padStart(2, '0');
+  const hours = String(end.getHours()).padStart(2, '0');
+  const mins = String(end.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${mins}`;
+};
+
+const calculateResolvedInMinutes = (symptomStartStr, resolvedAtStr) => {
+  if (!symptomStartStr || !resolvedAtStr) return 60;
+  const start = new Date(String(symptomStartStr).replace(' ', 'T'));
+  const end = new Date(String(resolvedAtStr).replace(' ', 'T'));
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 60;
+  const diffMs = end.getTime() - start.getTime();
+  return Math.max(1, Math.round(diffMs / 60000));
+};
+
 export default function App() {
   const [data, setData] = useState({ entries: [], reactions: [], confirmedTriggers: [] });
   const [loading, setLoading] = useState(true);
@@ -68,8 +90,10 @@ export default function App() {
     symptomStartTime: getInitialFormDateTime(selectedDate),
     severityLevel: 3,
     symptoms: ['Skin rash', 'Itching'],
+    isResolved: false,
     resolution: 'auto',
-    resolvedInMinutes: 120,
+    resolvedInMinutes: 60,
+    resolvedAt: calculateResolvedAt(getInitialFormDateTime(selectedDate), 60),
     notes: ''
   });
 
@@ -196,13 +220,16 @@ export default function App() {
       alert('Cannot log reactions for future dates.');
       return;
     }
+    const startTime = getInitialFormDateTime(targetDate);
     setEditingReactionId(null);
     setReactionForm({
-      symptomStartTime: getInitialFormDateTime(targetDate),
+      symptomStartTime: startTime,
       severityLevel: 3,
       symptoms: ['Skin rash', 'Itching'],
+      isResolved: false,
       resolution: 'auto',
-      resolvedInMinutes: 120,
+      resolvedInMinutes: 60,
+      resolvedAt: calculateResolvedAt(startTime, 60),
       notes: ''
     });
     setShowReactionModal(true);
@@ -210,13 +237,37 @@ export default function App() {
 
   const openEditReactionModal = (reaction) => {
     setEditingReactionId(reaction.id);
+    const startTime = reaction.symptomStartTime ? String(reaction.symptomStartTime).replace(' ', 'T').slice(0, 16) : getInitialFormDateTime(selectedDate);
+    const isRes = reaction.resolution && reaction.resolution !== 'unresolved' && (parseInt(reaction.resolvedInMinutes || 0, 10) > 0 || reaction.resolution === 'antihistamine' || reaction.resolution === 'auto');
+    const mins = parseInt(reaction.resolvedInMinutes || 60, 10);
     setReactionForm({
       id: reaction.id,
-      symptomStartTime: reaction.symptomStartTime ? String(reaction.symptomStartTime).replace(' ', 'T').slice(0, 16) : getInitialFormDateTime(selectedDate),
+      symptomStartTime: startTime,
       severityLevel: reaction.severityLevel || 3,
       symptoms: Array.isArray(reaction.symptoms) ? reaction.symptoms : [],
-      resolution: reaction.resolution || 'auto',
-      resolvedInMinutes: reaction.resolvedInMinutes || 120,
+      isResolved: !!isRes,
+      resolution: (isRes && reaction.resolution) ? reaction.resolution : 'auto',
+      resolvedInMinutes: mins,
+      resolvedAt: calculateResolvedAt(startTime, mins),
+      notes: reaction.notes || ''
+    });
+    setShowReactionModal(true);
+  };
+
+  const openMarkResolvedModal = (reaction) => {
+    setEditingReactionId(reaction.id);
+    const startTime = reaction.symptomStartTime ? String(reaction.symptomStartTime).replace(' ', 'T').slice(0, 16) : getInitialFormDateTime(selectedDate);
+    const nowTime = getInitialFormDateTime();
+    const mins = calculateResolvedInMinutes(startTime, nowTime);
+    setReactionForm({
+      id: reaction.id,
+      symptomStartTime: startTime,
+      severityLevel: reaction.severityLevel || 3,
+      symptoms: Array.isArray(reaction.symptoms) ? reaction.symptoms : [],
+      isResolved: true,
+      resolution: reaction.resolution && reaction.resolution !== 'unresolved' ? reaction.resolution : 'auto',
+      resolvedInMinutes: mins,
+      resolvedAt: nowTime,
       notes: reaction.notes || ''
     });
     setShowReactionModal(true);
@@ -359,6 +410,27 @@ export default function App() {
       .sort((a, b) => b.reactionDaysCount - a.reactionDaysCount || b.ratio - a.ratio);
   }, [data, daySummaryMap]);
 
+  // Unified timeline sorter (combines food entries and reactions by timestamp)
+  const getUnifiedTimeline = (dayInfo) => {
+    if (!dayInfo) return [];
+    const entries = (dayInfo.entries || []).map(e => ({
+      ...e,
+      timelineType: 'entry',
+      timeStr: parseTimeStr(e.loggedAt),
+      rawTime: e.loggedAt ? String(e.loggedAt).replace('T', ' ') : ''
+    }));
+    const reactions = (dayInfo.reactions || []).map(r => ({
+      ...r,
+      timelineType: 'reaction',
+      timeStr: parseTimeStr(r.symptomStartTime),
+      rawTime: r.symptomStartTime ? String(r.symptomStartTime).replace('T', ' ') : ''
+    }));
+
+    const combined = [...entries, ...reactions];
+    combined.sort((a, b) => a.rawTime.localeCompare(b.rawTime));
+    return combined;
+  };
+
   // Save Handlers (Create or Update)
   const handleSaveEntry = async (e) => {
     e.preventDefault();
@@ -376,7 +448,15 @@ export default function App() {
 
   const handleSaveReaction = async (e) => {
     e.preventDefault();
-    const payload = editingReactionId ? { ...reactionForm, id: editingReactionId } : reactionForm;
+    const payload = {
+      ...(editingReactionId ? { id: editingReactionId } : {}),
+      symptomStartTime: reactionForm.symptomStartTime,
+      severityLevel: reactionForm.severityLevel,
+      symptoms: reactionForm.symptoms,
+      resolution: reactionForm.isResolved ? (reactionForm.resolution || 'auto') : 'unresolved',
+      resolvedInMinutes: reactionForm.isResolved ? (parseInt(reactionForm.resolvedInMinutes || 0, 10)) : 0,
+      notes: reactionForm.notes || ''
+    };
     const res = await addReaction(payload);
     if (res && res.error === 'unauthenticated') {
       handleLogout();
@@ -646,55 +726,67 @@ export default function App() {
                   No food or reactions logged today.
                 </div>
               ) : (
-                <>
-                  {(daySummaryMap[todayStr]?.entries || []).map(entry => (
-                    <div key={entry.id} className="timeline-item">
+                getUnifiedTimeline(daySummaryMap[todayStr]).map(item => (
+                  item.timelineType === 'entry' ? (
+                    <div key={`entry-${item.id}`} className="timeline-item">
                       <div className="timeline-dot" />
                       <div className="timeline-content">
                         <div className="timeline-header">
-                          <span>{entry.entryType === 'food' ? '🍽️ Food' : '⚠️ Other'}</span>
-                          <span>{parseTimeStr(entry.loggedAt)}</span>
+                          <span>{item.entryType === 'food' ? '🍽️ Food/Drink' : '⚠️ Other'}</span>
+                          <span>{item.timeStr}</span>
                         </div>
-                        <div className="timeline-body">{entry.itemName}</div>
-                        {entry.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{entry.notes}</div>}
+                        <div className="timeline-body">{item.itemName}</div>
+                        {item.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{item.notes}</div>}
                         <div className="action-links">
-                          <button className="action-link-btn edit" onClick={() => openEditLogModal(entry)}>
+                          <button className="action-link-btn edit" onClick={() => openEditLogModal(item)}>
                             ✏️ Edit
                           </button>
-                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(entry.id, 'entry')}>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(item.id, 'entry')}>
                             🗑️ Delete
                           </button>
                         </div>
                       </div>
                     </div>
-                  ))}
-
-                  {(daySummaryMap[todayStr]?.reactions || []).map(r => (
-                    <div key={r.id} className="timeline-item reaction">
+                  ) : (
+                    <div key={`reaction-${item.id}`} className="timeline-item reaction">
                       <div className="timeline-dot" />
                       <div className="timeline-content" style={{ background: 'var(--accent-red-bg)', borderColor: 'var(--accent-red)' }}>
                         <div className="timeline-header" style={{ color: '#fca5a5' }}>
-                          <span>🚨 Allergy Reaction (Level {r.severityLevel}/5)</span>
-                          <span>{parseTimeStr(r.symptomStartTime)}</span>
+                          <span>🚨 Reaction Event (Severity {item.severityLevel}/5)</span>
+                          <span>{item.timeStr}</span>
                         </div>
                         <div className="timeline-body" style={{ color: '#fff' }}>
-                          {(r.symptoms || []).join(', ')}
+                          {(item.symptoms || []).join(', ')}
                         </div>
-                        <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '4px' }}>
-                          Resolution: {r.resolution === 'antihistamine' ? '💊 Took Antihistamine' : `⏱️ Auto-resolved (${r.resolvedInMinutes || 'some'} mins)`}
-                        </div>
+                        {(!item.resolution || item.resolution === 'unresolved' || !item.resolvedInMinutes) ? (
+                          <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ background: 'rgba(239, 68, 68, 0.3)', border: '1px solid #f87171', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600, color: '#fecaca' }}>
+                              ⏳ Ongoing / Unresolved
+                            </span>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '4px' }}>
+                            Resolution: {item.resolution === 'antihistamine' ? '💊 Took Antihistamine' : '⏱️ Auto-resolved'} ({item.resolvedInMinutes} mins)
+                          </div>
+                        )}
+                        {item.notes && <div style={{ fontSize: '0.8rem', color: '#f8fafc', marginTop: '4px' }}>Note: {item.notes}</div>}
                         <div className="action-links">
-                          <button className="action-link-btn edit" style={{ color: '#93c5fd' }} onClick={() => openEditReactionModal(r)}>
+                          {(!item.resolution || item.resolution === 'unresolved' || !item.resolvedInMinutes) && (
+                            <button className="action-link-btn resolve-btn" onClick={() => openMarkResolvedModal(item)}>
+                              ✅ Mark as Resolved
+                            </button>
+                          )}
+                          <button className="action-link-btn edit" style={{ color: '#93c5fd' }} onClick={() => openEditReactionModal(item)}>
                             ✏️ Edit
                           </button>
-                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(r.id, 'reaction')}>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(item.id, 'reaction')}>
                             🗑️ Delete
                           </button>
                         </div>
                       </div>
                     </div>
-                  ))}
-                </>
+                  )
+                ))
               )}
             </div>
           </div>
@@ -771,56 +863,67 @@ export default function App() {
                   No items or reactions logged on this date.
                 </div>
               ) : (
-                <>
-                  {selectedDayInfo.entries.map(e => (
-                    <div key={e.id} className="timeline-item">
+                getUnifiedTimeline(selectedDayInfo).map(item => (
+                  item.timelineType === 'entry' ? (
+                    <div key={`entry-${item.id}`} className="timeline-item">
                       <div className="timeline-dot" />
                       <div className="timeline-content">
                         <div className="timeline-header">
-                          <span>{e.entryType === 'food' ? '🍽️ Food/Drink' : '⚠️ Environment/Other'}</span>
-                          <span>{parseTimeStr(e.loggedAt)}</span>
+                          <span>{item.entryType === 'food' ? '🍽️ Food/Drink' : '⚠️ Environment/Other'}</span>
+                          <span>{item.timeStr}</span>
                         </div>
-                        <div className="timeline-body">{e.itemName}</div>
-                        {e.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{e.notes}</div>}
+                        <div className="timeline-body">{item.itemName}</div>
+                        {item.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{item.notes}</div>}
                         <div className="action-links">
-                          <button className="action-link-btn edit" onClick={() => openEditLogModal(e)}>
+                          <button className="action-link-btn edit" onClick={() => openEditLogModal(item)}>
                             ✏️ Edit
                           </button>
-                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(e.id, 'entry')}>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(item.id, 'entry')}>
                             🗑️ Delete
                           </button>
                         </div>
                       </div>
                     </div>
-                  ))}
-
-                  {selectedDayInfo.reactions.map(r => (
-                    <div key={r.id} className="timeline-item reaction">
+                  ) : (
+                    <div key={`reaction-${item.id}`} className="timeline-item reaction">
                       <div className="timeline-dot" />
                       <div className="timeline-content" style={{ background: 'var(--accent-red-bg)', borderColor: 'var(--accent-red)' }}>
                         <div className="timeline-header" style={{ color: '#fca5a5' }}>
-                          <span>🚨 Reaction Event (Severity {r.severityLevel}/5)</span>
-                          <span>{parseTimeStr(r.symptomStartTime)}</span>
+                          <span>🚨 Reaction Event (Severity {item.severityLevel}/5)</span>
+                          <span>{item.timeStr}</span>
                         </div>
                         <div className="timeline-body" style={{ color: '#fff' }}>
-                          {(r.symptoms || []).join(', ')}
+                          {(item.symptoms || []).join(', ')}
                         </div>
-                        <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '4px' }}>
-                          {r.resolution === 'antihistamine' ? '💊 Took Antihistamine' : `⏱️ Auto-resolved (${r.resolvedInMinutes || 'some'} min)`}
-                        </div>
-                        {r.notes && <div style={{ fontSize: '0.8rem', color: '#f8fafc', marginTop: '4px' }}>Note: {r.notes}</div>}
+                        {(!item.resolution || item.resolution === 'unresolved' || !item.resolvedInMinutes) ? (
+                          <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ background: 'rgba(239, 68, 68, 0.3)', border: '1px solid #f87171', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600, color: '#fecaca' }}>
+                              ⏳ Ongoing / Unresolved
+                            </span>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '4px' }}>
+                            Resolution: {item.resolution === 'antihistamine' ? '💊 Took Antihistamine' : '⏱️ Auto-resolved'} ({item.resolvedInMinutes} mins)
+                          </div>
+                        )}
+                        {item.notes && <div style={{ fontSize: '0.8rem', color: '#f8fafc', marginTop: '4px' }}>Note: {item.notes}</div>}
                         <div className="action-links">
-                          <button className="action-link-btn edit" style={{ color: '#93c5fd' }} onClick={() => openEditReactionModal(r)}>
+                          {(!item.resolution || item.resolution === 'unresolved' || !item.resolvedInMinutes) && (
+                            <button className="action-link-btn resolve-btn" onClick={() => openMarkResolvedModal(item)}>
+                              ✅ Mark as Resolved
+                            </button>
+                          )}
+                          <button className="action-link-btn edit" style={{ color: '#93c5fd' }} onClick={() => openEditReactionModal(item)}>
                             ✏️ Edit
                           </button>
-                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(r.id, 'reaction')}>
+                          <button className="action-link-btn delete" onClick={() => handleDeleteItem(item.id, 'reaction')}>
                             🗑️ Delete
                           </button>
                         </div>
                       </div>
                     </div>
-                  ))}
-                </>
+                  )
+                ))
               )}
             </div>
           </div>
@@ -946,7 +1049,14 @@ export default function App() {
                   className="form-control"
                   max={getInitialFormDateTime(todayStr)}
                   value={reactionForm.symptomStartTime}
-                  onChange={e => setReactionForm({ ...reactionForm, symptomStartTime: e.target.value })}
+                  onChange={e => {
+                    const newStart = e.target.value;
+                    setReactionForm(prev => ({
+                      ...prev,
+                      symptomStartTime: newStart,
+                      resolvedAt: calculateResolvedAt(newStart, prev.resolvedInMinutes || 60)
+                    }));
+                  }}
                   required
                 />
               </div>
@@ -982,34 +1092,86 @@ export default function App() {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Resolution Method</label>
+                <label className="form-label">Reaction Resolution Status</label>
                 <div className="type-toggle">
                   <div
-                    className={`toggle-option ${reactionForm.resolution === 'auto' ? 'active' : ''}`}
-                    onClick={() => setReactionForm({ ...reactionForm, resolution: 'auto' })}
+                    className={`toggle-option ${!reactionForm.isResolved ? 'active' : ''}`}
+                    onClick={() => setReactionForm(prev => ({ ...prev, isResolved: false }))}
                   >
-                    ⏱️ Auto-resolved
+                    ⏳ Ongoing / Unresolved
                   </div>
                   <div
-                    className={`toggle-option ${reactionForm.resolution === 'antihistamine' ? 'active' : ''}`}
-                    onClick={() => setReactionForm({ ...reactionForm, resolution: 'antihistamine' })}
+                    className={`toggle-option ${reactionForm.isResolved ? 'active' : ''}`}
+                    onClick={() => setReactionForm(prev => ({ ...prev, isResolved: true }))}
                   >
-                    💊 Took Antihistamine
+                    ✅ Resolved
                   </div>
                 </div>
               </div>
 
-              {reactionForm.resolution === 'auto' && (
-                <div className="form-group">
-                  <label className="form-label">Resolved in how long? (minutes)</label>
-                  <input
-                    type="number"
-                    className="form-control"
-                    placeholder="e.g. 60, 120"
-                    value={reactionForm.resolvedInMinutes}
-                    onChange={e => setReactionForm({ ...reactionForm, resolvedInMinutes: parseInt(e.target.value || 0, 10) })}
-                  />
-                </div>
+              {reactionForm.isResolved && (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">Resolution Method</label>
+                    <div className="type-toggle">
+                      <div
+                        className={`toggle-option ${reactionForm.resolution === 'auto' ? 'active' : ''}`}
+                        onClick={() => setReactionForm(prev => ({ ...prev, resolution: 'auto' }))}
+                      >
+                        ⏱️ Auto-resolved
+                      </div>
+                      <div
+                        className={`toggle-option ${reactionForm.resolution === 'antihistamine' ? 'active' : ''}`}
+                        onClick={() => setReactionForm(prev => ({ ...prev, resolution: 'antihistamine' }))}
+                      >
+                        💊 Took Antihistamine
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="form-group" style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                    <label className="form-label" style={{ marginBottom: '0.6rem' }}>Editable Resolved Time</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Resolved Date & Time</label>
+                        <input
+                          type="datetime-local"
+                          className="form-control"
+                          value={reactionForm.resolvedAt || ''}
+                          min={reactionForm.symptomStartTime}
+                          onChange={e => {
+                            const newResolvedAt = e.target.value;
+                            const mins = calculateResolvedInMinutes(reactionForm.symptomStartTime, newResolvedAt);
+                            setReactionForm(prev => ({
+                              ...prev,
+                              resolvedAt: newResolvedAt,
+                              resolvedInMinutes: mins
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Duration (minutes)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          className="form-control"
+                          placeholder="e.g. 60, 120"
+                          value={reactionForm.resolvedInMinutes || ''}
+                          onChange={e => {
+                            const mins = parseInt(e.target.value || 0, 10);
+                            const newResolvedAt = calculateResolvedAt(reactionForm.symptomStartTime, mins);
+                            setReactionForm(prev => ({
+                              ...prev,
+                              resolvedInMinutes: mins,
+                              resolvedAt: newResolvedAt
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </>
               )}
 
               <div className="form-group">
