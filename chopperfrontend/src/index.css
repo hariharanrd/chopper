@@ -454,6 +454,11 @@ body {
   color: #60a5fa;
 }
 
+.action-link-btn.resolve-btn {
+  color: #86efac;
+  font-weight: 600;
+}
+
 .action-link-btn.delete {
   color: #ef4444;
 }

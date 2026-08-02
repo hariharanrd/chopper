@@ -4,6 +4,8 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -242,10 +244,14 @@ public class Sample implements CatalystAdvancedIOHandler {
 	// ── Data Handlers ─────────────────────────────────────────────────────────────
 
 	private String formatDateTime(String dt) {
-		if (dt == null) return "";
+		if (dt == null || dt.trim().isEmpty()) return "";
 		String clean = dt.trim().replace("T", " ");
-		if (clean.length() == 16) {
+		if (clean.length() >= 19) {
+			clean = clean.substring(0, 19);
+		} else if (clean.length() == 16) {
 			clean += ":00";
+		} else if (clean.length() == 10) {
+			clean += " 00:00:00";
 		}
 		return clean;
 	}
@@ -287,9 +293,13 @@ public class Sample implements CatalystAdvancedIOHandler {
 		String loggedAt = formatDateTime(body.optString("loggedAt", ""));
 		String notes = body.optString("notes", "");
 
-		if (itemName.isEmpty() || loggedAt.isEmpty()) {
-			sendJson(response, 400, new JSONObject().put("error", "itemName and loggedAt are required"));
+		if (itemName.isEmpty()) {
+			sendJson(response, 400, new JSONObject().put("error", "itemName is required"));
 			return;
+		}
+
+		if (loggedAt.isEmpty()) {
+			loggedAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 		}
 
 		if (isFutureDateTime(loggedAt)) {
@@ -377,8 +387,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		String notes = body.optString("notes", "");
 
 		if (symptomStartTime.isEmpty()) {
-			sendJson(response, 400, new JSONObject().put("error", "symptomStartTime is required"));
-			return;
+			symptomStartTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 		}
 
 		if (isFutureDateTime(symptomStartTime)) {
@@ -446,9 +455,17 @@ public class Sample implements CatalystAdvancedIOHandler {
 		JSONObject body = parseBody(request);
 		String itemName = body.optString("itemName", "").trim();
 		String confirmedAt = formatDateTime(body.optString("confirmedAt", ""));
+		if (confirmedAt.isEmpty()) {
+			confirmedAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+		}
 
 		if (itemName.isEmpty()) {
 			sendJson(response, 400, new JSONObject().put("error", "itemName is required"));
+			return;
+		}
+
+		if (isFutureDateTime(confirmedAt)) {
+			sendJson(response, 400, new JSONObject().put("error", "Cannot add confirmed triggers for future dates"));
 			return;
 		}
 
