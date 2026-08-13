@@ -220,12 +220,23 @@ export async function deleteReaction(id) {
   }
 }
 
+const getNowDateTimeString = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const mins = String(d.getMinutes()).padStart(2, '0');
+  const secs = String(d.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
+};
+
 export async function addConfirmedTrigger(itemName) {
   try {
     const res = await fetch(`${BASE_URL}/triggers`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ itemName, confirmedAt: new Date().toISOString() })
+      body: JSON.stringify({ itemName, confirmedAt: getNowDateTimeString() })
     });
     if (res.status === 401) {
       clearToken();
@@ -260,7 +271,7 @@ export async function addSuspectedTrigger(itemName) {
     const res = await fetch(`${BASE_URL}/suspected-triggers`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ itemName, suspectedAt: new Date().toISOString() })
+      body: JSON.stringify({ itemName, suspectedAt: getNowDateTimeString() })
     });
     if (res.status === 401) {
       clearToken();

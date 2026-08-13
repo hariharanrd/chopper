@@ -30,14 +30,24 @@ const parseTimeStr = (dtStr) => {
   return parts[1] ? parts[1].slice(0, 5) : '';
 };
 
+// Helper to get YYYY-MM-DD in local time
+const getLocalDateStr = (d = new Date()) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // Generates YYYY-MM-DDTHH:mm for targetDateStr (or current time if today)
 const getInitialFormDateTime = (targetDateStr) => {
   const now = new Date();
-  const currentHHmm = now.toTimeString().slice(0, 5);
+  const hours = String(now.getHours()).padStart(2, '0');
+  const mins = String(now.getMinutes()).padStart(2, '0');
+  const currentHHmm = `${hours}:${mins}`;
   if (targetDateStr) {
     return `${targetDateStr}T${currentHHmm}`;
   }
-  return now.toISOString().slice(0, 16);
+  return `${getLocalDateStr(now)}T${currentHHmm}`;
 };
 
 const calculateResolvedAt = (symptomStartStr, minutes) => {
@@ -63,7 +73,7 @@ const calculateResolvedInMinutes = (symptomStartStr, resolvedAtStr) => {
 };
 
 export default function App() {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateStr();
   const currentMonthStr = todayStr.slice(0, 7); // "YYYY-MM"
 
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
