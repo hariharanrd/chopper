@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -32,6 +33,7 @@ import com.zc.component.zcql.ZCQL;
 
 public class Sample implements CatalystAdvancedIOHandler {
 	private static final Logger LOGGER = Logger.getLogger(Sample.class.getName());
+	private static final ZoneId APP_ZONE = ZoneId.of("Asia/Kolkata");
 
 	// JWT expiry: 24 hours in seconds
 	private static final long JWT_EXPIRY_SECONDS = 24 * 60 * 60;
@@ -291,7 +293,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		try {
 			String clean = dtStr.trim().replace("T", " ");
 			String datePart = clean.split(" ")[0];
-			LocalDate today = LocalDate.now();
+			LocalDate today = LocalDate.now(APP_ZONE);
 			LocalDate targetDate = LocalDate.parse(datePart);
 			return targetDate.isAfter(today);
 		} catch (Exception e) {
@@ -329,7 +331,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		}
 
 		if (loggedAt.isEmpty()) {
-			loggedAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+			loggedAt = LocalDateTime.now(APP_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 		}
 
 		if (isFutureDateTime(loggedAt)) {
@@ -417,7 +419,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		String notes = body.optString("notes", "");
 
 		if (symptomStartTime.isEmpty()) {
-			symptomStartTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+			symptomStartTime = LocalDateTime.now(APP_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 		}
 
 		if (isFutureDateTime(symptomStartTime)) {
@@ -486,7 +488,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		String itemName = body.optString("itemName", "").trim();
 		String confirmedAt = formatDateTime(body.optString("confirmedAt", ""));
 		if (confirmedAt.isEmpty()) {
-			confirmedAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+			confirmedAt = LocalDateTime.now(APP_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 		}
 
 		if (itemName.isEmpty()) {
@@ -541,7 +543,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 		String itemName = body.optString("itemName", "").trim();
 		String suspectedAt = formatDateTime(body.optString("suspectedAt", ""));
 		if (suspectedAt.isEmpty()) {
-			suspectedAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+			suspectedAt = LocalDateTime.now(APP_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 		}
 
 		if (itemName.isEmpty()) {
@@ -582,7 +584,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 	private void handleGetHeatmap(HttpServletRequest request, HttpServletResponse response) throws Exception {
 		String monthParam = request.getParameter("month"); // Format "YYYY-MM"
 		if (monthParam == null || monthParam.trim().isEmpty() || !monthParam.trim().matches("\\d{4}-\\d{2}")) {
-			monthParam = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM"));
+			monthParam = LocalDate.now(APP_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM"));
 		}
 		monthParam = monthParam.trim();
 		String startDt = monthParam + "-01 00:00:00";
@@ -598,10 +600,11 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 		// Query LogEntries for the month
 		try {
-			String entriesQuery = "SELECT LoggedAt FROM LogEntries WHERE LoggedAt >= '" + startDt + "' AND LoggedAt <= '" + endDt + "'";
+			String entriesQuery = "SELECT LoggedAt, ItemName FROM LogEntries WHERE LoggedAt >= '" + startDt + "' AND LoggedAt <= '" + endDt + "'";
 			ArrayList<ZCRowObject> entryRows = ZCQL.getInstance().executeQuery(entriesQuery);
 			for (ZCRowObject row : entryRows) {
 				Object loggedAtObj = getVal(row, "LogEntries", "LoggedAt");
+				Object itemObj = getVal(row, "LogEntries", "ItemName");
 				if (loggedAtObj != null) {
 					String dateKey = parseDateKey(loggedAtObj.toString());
 					if (!dateKey.isEmpty()) {
@@ -611,9 +614,13 @@ public class Sample implements CatalystAdvancedIOHandler {
 							dayObj.put("entriesCount", 0);
 							dayObj.put("reactionsCount", 0);
 							dayObj.put("maxSeverity", 0);
+							dayObj.put("tookAntihistamine", false);
 							daysMap.put(dateKey, dayObj);
 						}
 						dayObj.put("entriesCount", dayObj.getInt("entriesCount") + 1);
+						if (itemObj != null && itemObj.toString().toLowerCase().contains("antihistamine")) {
+							dayObj.put("tookAntihistamine", true);
+						}
 					}
 				}
 			}
@@ -623,11 +630,12 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 		// Query Reactions for the month
 		try {
-			String reactionsQuery = "SELECT SymptomStartTime, SeverityLevel FROM Reactions WHERE SymptomStartTime >= '" + startDt + "' AND SymptomStartTime <= '" + endDt + "'";
+			String reactionsQuery = "SELECT SymptomStartTime, SeverityLevel, Resolution FROM Reactions WHERE SymptomStartTime >= '" + startDt + "' AND SymptomStartTime <= '" + endDt + "'";
 			ArrayList<ZCRowObject> reactionRows = ZCQL.getInstance().executeQuery(reactionsQuery);
 			for (ZCRowObject row : reactionRows) {
 				Object startObj = getVal(row, "Reactions", "SymptomStartTime");
 				Object sevObj = getVal(row, "Reactions", "SeverityLevel");
+				Object resObj = getVal(row, "Reactions", "Resolution");
 				if (startObj != null) {
 					String dateKey = parseDateKey(startObj.toString());
 					if (!dateKey.isEmpty()) {
@@ -637,6 +645,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 							dayObj.put("entriesCount", 0);
 							dayObj.put("reactionsCount", 0);
 							dayObj.put("maxSeverity", 0);
+							dayObj.put("tookAntihistamine", false);
 							daysMap.put(dateKey, dayObj);
 						}
 						int sev = 1;
@@ -646,6 +655,9 @@ public class Sample implements CatalystAdvancedIOHandler {
 						dayObj.put("reactionsCount", dayObj.getInt("reactionsCount") + 1);
 						if (sev > dayObj.getInt("maxSeverity")) {
 							dayObj.put("maxSeverity", sev);
+						}
+						if (resObj != null && "antihistamine".equalsIgnoreCase(resObj.toString().trim())) {
+							dayObj.put("tookAntihistamine", true);
 						}
 					}
 				}
@@ -712,7 +724,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 	private void handleGetDayDetails(HttpServletRequest request, HttpServletResponse response) throws Exception {
 		String dateParam = request.getParameter("date");
 		if (dateParam == null || dateParam.trim().isEmpty()) {
-			dateParam = LocalDate.now().toString();
+			dateParam = LocalDate.now(APP_ZONE).toString();
 		}
 		dateParam = dateParam.trim();
 		String startDt = dateParam + " 00:00:00";

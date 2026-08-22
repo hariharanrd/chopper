@@ -30,14 +30,24 @@ const parseTimeStr = (dtStr) => {
   return parts[1] ? parts[1].slice(0, 5) : '';
 };
 
+// Helper to get YYYY-MM-DD in local time
+const getLocalDateStr = (d = new Date()) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // Generates YYYY-MM-DDTHH:mm for targetDateStr (or current time if today)
 const getInitialFormDateTime = (targetDateStr) => {
   const now = new Date();
-  const currentHHmm = now.toTimeString().slice(0, 5);
+  const hours = String(now.getHours()).padStart(2, '0');
+  const mins = String(now.getMinutes()).padStart(2, '0');
+  const currentHHmm = `${hours}:${mins}`;
   if (targetDateStr) {
     return `${targetDateStr}T${currentHHmm}`;
   }
-  return now.toISOString().slice(0, 16);
+  return `${getLocalDateStr(now)}T${currentHHmm}`;
 };
 
 const calculateResolvedAt = (symptomStartStr, minutes) => {
@@ -63,7 +73,7 @@ const calculateResolvedInMinutes = (symptomStartStr, resolvedAtStr) => {
 };
 
 export default function App() {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateStr();
   const currentMonthStr = todayStr.slice(0, 7); // "YYYY-MM"
 
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
@@ -630,15 +640,21 @@ export default function App() {
                   const statusClass = info ? info.status : '';
                   const countEntries = info ? info.entriesCount : 0;
                   const countReactions = info ? info.reactionsCount : 0;
+                  const tookAntihistamine = Boolean(info && (info.tookAntihistamine || info.antihistamineCount > 0));
 
                   return (
                     <div
                       key={cell.dateKey}
-                      className={`calendar-day-cell ${cell.isFuture ? 'future' : statusClass} ${selectedDate === cell.dateKey ? 'selected' : ''}`}
+                      className={`calendar-day-cell ${cell.isFuture ? 'future' : statusClass} ${selectedDate === cell.dateKey ? 'selected' : ''} ${tookAntihistamine ? 'has-antihistamine' : ''}`}
                       onClick={() => handleSelectDayCell(cell.dateKey)}
-                      title={cell.isFuture ? `${cell.dateKey}: Future date` : `${cell.dateKey}: ${countEntries} logged items, ${countReactions} reactions`}
+                      title={cell.isFuture ? `${cell.dateKey}: Future date` : `${cell.dateKey}: ${countEntries} logged items, ${countReactions} reactions${tookAntihistamine ? ' (💊 Antihistamine taken)' : ''}`}
                     >
-                      <span className="day-number">{cell.dayNum}</span>
+                      <div className="day-cell-header">
+                        <span className="day-number">{cell.dayNum}</span>
+                        {tookAntihistamine && (
+                          <span className="pill-badge" title="Antihistamine Taken">💊</span>
+                        )}
+                      </div>
                       {(countEntries > 0 || countReactions > 0) && (
                         <div className="day-cell-indicators">
                           {countReactions > 0 && <span className="indicator reaction">🚨 {countReactions}</span>}
@@ -660,6 +676,7 @@ export default function App() {
                 <div className="legend-item"><div className="color-box safe" /><span>Safe</span></div>
                 <div className="legend-item"><div className="color-box mild" /><span>Mild</span></div>
                 <div className="legend-item"><div className="color-box severe" /><span>Severe</span></div>
+                <div className="legend-item"><span className="legend-pill-icon">💊</span><span>Antihistamine</span></div>
               </div>
             </div>
           </div>
@@ -860,6 +877,13 @@ export default function App() {
                 ) : (
                   <span className="tag-pill" style={{ background: 'var(--accent-green-bg)', color: '#86efac' }}>
                     🟩 Safe Day
+                  </span>
+                )}
+                {(selectedDayInfo.reactions.some(r => r.resolution === 'antihistamine') ||
+                  selectedDayInfo.entries.some(e => e.itemName && e.itemName.toLowerCase().includes('antihistamine')) ||
+                  (heatmapData.days[selectedDate] && heatmapData.days[selectedDate].tookAntihistamine)) && (
+                  <span className="tag-pill" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.4)' }}>
+                    💊 Antihistamine Taken
                   </span>
                 )}
               </div>
