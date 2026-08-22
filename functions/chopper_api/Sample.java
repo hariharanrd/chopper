@@ -600,10 +600,11 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 		// Query LogEntries for the month
 		try {
-			String entriesQuery = "SELECT LoggedAt FROM LogEntries WHERE LoggedAt >= '" + startDt + "' AND LoggedAt <= '" + endDt + "'";
+			String entriesQuery = "SELECT LoggedAt, ItemName FROM LogEntries WHERE LoggedAt >= '" + startDt + "' AND LoggedAt <= '" + endDt + "'";
 			ArrayList<ZCRowObject> entryRows = ZCQL.getInstance().executeQuery(entriesQuery);
 			for (ZCRowObject row : entryRows) {
 				Object loggedAtObj = getVal(row, "LogEntries", "LoggedAt");
+				Object itemObj = getVal(row, "LogEntries", "ItemName");
 				if (loggedAtObj != null) {
 					String dateKey = parseDateKey(loggedAtObj.toString());
 					if (!dateKey.isEmpty()) {
@@ -613,9 +614,13 @@ public class Sample implements CatalystAdvancedIOHandler {
 							dayObj.put("entriesCount", 0);
 							dayObj.put("reactionsCount", 0);
 							dayObj.put("maxSeverity", 0);
+							dayObj.put("tookAntihistamine", false);
 							daysMap.put(dateKey, dayObj);
 						}
 						dayObj.put("entriesCount", dayObj.getInt("entriesCount") + 1);
+						if (itemObj != null && itemObj.toString().toLowerCase().contains("antihistamine")) {
+							dayObj.put("tookAntihistamine", true);
+						}
 					}
 				}
 			}
@@ -625,11 +630,12 @@ public class Sample implements CatalystAdvancedIOHandler {
 
 		// Query Reactions for the month
 		try {
-			String reactionsQuery = "SELECT SymptomStartTime, SeverityLevel FROM Reactions WHERE SymptomStartTime >= '" + startDt + "' AND SymptomStartTime <= '" + endDt + "'";
+			String reactionsQuery = "SELECT SymptomStartTime, SeverityLevel, Resolution FROM Reactions WHERE SymptomStartTime >= '" + startDt + "' AND SymptomStartTime <= '" + endDt + "'";
 			ArrayList<ZCRowObject> reactionRows = ZCQL.getInstance().executeQuery(reactionsQuery);
 			for (ZCRowObject row : reactionRows) {
 				Object startObj = getVal(row, "Reactions", "SymptomStartTime");
 				Object sevObj = getVal(row, "Reactions", "SeverityLevel");
+				Object resObj = getVal(row, "Reactions", "Resolution");
 				if (startObj != null) {
 					String dateKey = parseDateKey(startObj.toString());
 					if (!dateKey.isEmpty()) {
@@ -639,6 +645,7 @@ public class Sample implements CatalystAdvancedIOHandler {
 							dayObj.put("entriesCount", 0);
 							dayObj.put("reactionsCount", 0);
 							dayObj.put("maxSeverity", 0);
+							dayObj.put("tookAntihistamine", false);
 							daysMap.put(dateKey, dayObj);
 						}
 						int sev = 1;
@@ -648,6 +655,9 @@ public class Sample implements CatalystAdvancedIOHandler {
 						dayObj.put("reactionsCount", dayObj.getInt("reactionsCount") + 1);
 						if (sev > dayObj.getInt("maxSeverity")) {
 							dayObj.put("maxSeverity", sev);
+						}
+						if (resObj != null && "antihistamine".equalsIgnoreCase(resObj.toString().trim())) {
+							dayObj.put("tookAntihistamine", true);
 						}
 					}
 				}
